@@ -328,49 +328,148 @@ package: check-mise
     @./mvnw clean package -DskipTests
     @echo "{{ GREEN }}✅ JAR created: target/{{PROJECT_NAME}}.jar{{ NC }}"
 
-## ============================================
-## Helper Functions for AI Calls
-## ============================================
-#
-## Internal: Call AI with specific role
-#_call_ai role prompt *metadata:
-#    #!/usr/bin/env bash
-#    set -euo pipefail
-#
-#    # Build metadata JSON from key=value pairs
-#    META='{"role": "{{role}}", "user": "'$USER'", "project": "{{PROJECT_NAME}}"'
-#
-#    # Add custom metadata
-#    for item in {{metadata}}; do
-#        KEY=$(echo "$item" | cut -d= -f1)
-#        VALUE=$(echo "$item" | cut -d= -f2-)
-#        META="$META, \"$KEY\": \"$VALUE\""
-#    done
-#    META="$META}"
-#
-#    # Escape prompt for JSON
-#    PROMPT_ESCAPED=$(echo "{{prompt}}" | jq -Rs .)
-#
-#    # Call LiteLLM
-#    RESPONSE=$(curl -s -X POST {{LITELLM_URL}} \
-#      -H "Content-Type: application/json" \
-#      -H "Authorization: Bearer {{LITELLM_KEY}}" \
-#      -d "{
-#        \"model\": \"{{role}}\",
-#        \"messages\": [{\"role\": \"user\", \"content\": $PROMPT_ESCAPED}],
-#        \"metadata\": $META
-#      }")
-#
-#    # Check for errors
-#    if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
-#        echo -e "{{ RED }}❌ API Error:{{ NC }}" >&2
-#        echo "$RESPONSE" | jq '.error' >&2
-#        exit 1
-#    fi
-#
-#    # Extract and return content
-#    echo "$RESPONSE" | jq -r '.choices[0].message.content'
-#
+# ============================================
+# Helper: Call AI with role
+# ============================================
+
+# Internal: Call AI with specific role
+_call_ai role prompt_file *metadata:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Build metadata JSON from key=value pairs
+    META='{"role": "{{role}}", "user": "'"$USER"'", "project": "{{PROJECT_NAME}}"'
+
+    # Add custom metadata
+    for item in {{metadata}}; do
+        KEY=$(echo "$item" | cut -d= -f1)
+        VALUE=$(echo "$item" | cut -d= -f2-)
+        META="$META, \"$KEY\": \"$VALUE\""
+    done
+    META="$META}"
+
+    # Read prompt from file and escape for JSON
+    PROMPT_CONTENT=$(cat "{{prompt_file}}")
+
+    # Build complete JSON payload using jq
+    JSON_PAYLOAD=$(jq -n \
+      --arg model "{{role}}" \
+      --arg content "$PROMPT_CONTENT" \
+      --argjson metadata "$META" \
+      '{
+        model: $model,
+        messages: [{role: "user", content: $content}],
+        metadata: $metadata
+      }')
+
+    # Call LiteLLM
+    RESPONSE=$(curl -s -X POST {{LITELLM_URL}} \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer {{LITELLM_KEY}}" \
+      -d "$JSON_PAYLOAD")
+
+    # Check for errors
+    if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+        echo -e "{{ RED }}❌ API Error:{{ NC }}" >&2
+        echo "$RESPONSE" | jq '.error' >&2
+        exit 1
+    fi
+
+    # Extract and return content
+    echo "$RESPONSE" | jq -r '.choices[0].message.content'
+
+# ============================================
+# ROLE: COMMITTER (Commit Messages)
+# ============================================
+
+# Generate conventional commit message
+commit-msg:
+    #!/usr/bin/env bash
+    DIFF=$(git diff --staged)
+
+    if [ -z "$DIFF" ]; then
+      echo "❌ No staged changes"
+      exit 1
+    fi
+
+    TEMPLATE=$(cat prompts/templates/commit_message.md)
+
+    DIFF_FILE=$(mktemp)
+    PROMPT_FILE=$(mktemp)
+    trap 'rm -f "$DIFF_FILE" "$PROMPT_FILE"' EXIT
+
+    # Create prompt by replacing placeholders
+    PROMPT="${TEMPLATE//\[\[DIFF\]\]/$DIFF}"
+
+    # Write prompt to temp file
+    echo "$PROMPT" > "$PROMPT_FILE"
+
+    just _call_ai committer "$PROMPT_FILE" task=commit_message
+
+# Commit with AI-generated message
+commit:
+    #!/usr/bin/env bash
+    echo "💬 Generating commit message..."
+
+    MSG=$(just commit-msg)
+
+    if [ -z "$MSG" ]; then
+      echo "❌ Failed to generate commit message"
+      exit 1
+    fi
+
+    echo "📝 Commit message:"
+    echo "$MSG"
+    echo ""
+    echo "Proceed? (y/N)"
+    read -r confirm
+
+    if [ "$confirm" = "y" ]; then
+      git commit -m "$MSG"
+      echo "✅ Committed"
+    else
+      echo "❌ Aborted"
+    fi
+
+# ============================================
+# ROLE: REVIEWER (Code Review)
+# ============================================
+
+# Review code file (saves report)
+review file:
+    #!/usr/bin/env bash
+    echo -e "{{ BLUE }}🔍 LLM (Reviewer) is analyzing {{file}}...{{ NC }}"
+
+    if [ ! -f "{{file}}" ]; then
+      echo -e "{{ RED }}❌ File not found: {{file}}{{ NC }}"
+      exit 1
+    fi
+
+    CODE=$(cat "{{file}}")
+
+    TEMPLATE=$(cat prompts/templates/code_review.md)
+
+    # Create prompt by replacing placeholders
+    PROMPT="${TEMPLATE//\[\[LANGUAGE\]\]/kotlin}"
+    PROMPT="${PROMPT//\[\[CONTEXT\]\]/Spring Boot service}"
+    PROMPT="${PROMPT//\[\[CODE\]\]/$CODE}"
+
+    # Write prompt to temp file
+    TEMP_PROMPT=$(mktemp)
+    echo "$PROMPT" > "$TEMP_PROMPT"
+
+    mkdir -p reviews
+    REVIEW_FILE="reviews/$(basename "{{file}}" .kt)-review-$(date +%Y%m%d-%H%M%S).md"
+
+    # Pass temp file path instead of content
+    just _call_ai reviewer "$TEMP_PROMPT" task=code_review file="{{file}}" | tee "$REVIEW_FILE"
+
+    # Cleanup
+    rm -f "$TEMP_PROMPT"
+
+    echo ""
+    echo -e "{{ GREEN }}✅ Review saved to: $REVIEW_FILE{{ NC }}"
+
 ## ============================================
 ## ROLE: WRITER (Claude - Code Generation)
 ## ============================================
@@ -428,37 +527,7 @@ package: check-mise
 #
 #    echo -e "{{ GREEN }}✅ Feature created at $FEATURE_DIR/{{name}}Feature.kt{{ NC }}"
 #    echo -e "{{ BLUE }}💡 Next: just review $FEATURE_DIR/{{name}}Feature.kt{{ NC }}"
-#
-## ============================================
-## ROLE: REVIEWER (GPT-4 - Code Review)
-## ============================================
-#
-## Review code file (saves report)
-#review file:
-#    #!/usr/bin/env bash
-#    echo -e "{{ BLUE }}🔍 GPT-4 (Reviewer) is analyzing {{file}}...{{ NC }}"
-#
-#    if [ ! -f "{{file}}" ]; then
-#        echo -e "{{ RED }}❌ File not found: {{file}}{{ NC }}"
-#        exit 1
-#    fi
-#
-#    CODE=$(cat {{file}})
-#    TEMPLATE=$(cat prompts/templates/code_review.md)
-#
-#    PROMPT=$(echo "$TEMPLATE" | \
-#      sed "s|{{CODE}}|$CODE|g" | \
-#      sed "s|{{LANGUAGE}}|kotlin|g" | \
-#      sed "s|{{CONTEXT}}|Spring Boot service|g")
-#
-#    mkdir -p reviews
-#    REVIEW_FILE="reviews/$(basename {{file}} .kt)-review-$(date +%Y%m%d-%H%M%S).md"
-#
-#    just _call_ai reviewer "$PROMPT" task=code_review file={{file}} | tee "$REVIEW_FILE"
-#
-#    echo ""
-#    echo -e "{{ GREEN }}✅ Review saved to: $REVIEW_FILE{{ NC }}"
-#
+
 ## Quick review (no file save)
 #review-quick file:
 #    #!/usr/bin/env bash
