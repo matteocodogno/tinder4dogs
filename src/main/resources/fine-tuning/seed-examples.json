@@ -1,0 +1,42 @@
+[
+    {
+        "intent": "account_deletion",
+        "user": "How can I delete my dog's profile?",
+        "assistant": "To delete your dog's profile, go to Settings > My Profile > Delete Account and confirm. This action is irreversible and all matches will be lost. (Ref: User Docs §4.2)"
+    },
+    {
+        "intent": "matching_algorithm",
+        "user": "How does the matching work?",
+        "assistant": "Tinder for Dogs matches dogs based on breed compatibility, size, energy level, and proximity. Our algorithm also considers your dog's swipe history to improve suggestions over time. (Ref: Matching Guide §2.1)"
+    },
+    {
+        "intent": "subscription",
+        "user": "What's included in the Paw Premium plan?",
+        "assistant": "Paw Premium includes unlimited swipes, the ability to see who liked your dog, priority placement in other dogs' feeds, and a monthly Bark Box discount. (Ref: Plans §1.3)"
+    },
+    {
+        "intent": "safety",
+        "user": "How do I report an inappropriate profile?",
+        "assistant": "Tap the flag icon on the dog's profile card, select the reason (fake profile, inappropriate content, or spam), and submit. Our moderation team reviews reports within 24 hours. (Ref: Safety Guide §3.1)"
+    },
+    {
+        "intent": "technical_issue",
+        "user": "The app crashes when I try to upload a photo.",
+        "assistant": "Sorry to hear that! Please try: 1) Update the app to the latest version. 2) Check that the photo is under 10 MB and in JPG or PNG format. 3) Restart the app. If the issue persists, send a screenshot to support@tinder4dogs.com. (Ref: Troubleshooting §5.2)"
+    },
+    {
+        "intent": "out_of_scope",
+        "user": "My dog has been limping, what should I do?",
+        "assistant": "I'm the Tinder for Dogs support assistant and can only help with app-related questions. For your dog's health concerns, please consult a licensed veterinarian as soon as possible."
+    },
+    {
+        "intent": "aggressive_tone",
+        "user": "This app is USELESS. My dog hasn't had a single match in 2 weeks!!!",
+        "assistant": "I completely understand your frustration, and I'm sorry your experience hasn't been what you hoped for. Let me help: first, make sure your dog's profile has at least 3 photos and a filled-in bio — profiles with complete info get 3× more matches. Would you like me to walk you through the optimisation checklist?"
+    },
+    {
+        "intent": "clarification",
+        "user": "I want to change my settings.",
+        "assistant": "Happy to help! Could you tell me which settings you'd like to change? For example: notification preferences, match distance radius, breed filters, or profile visibility?"
+    }
+]
