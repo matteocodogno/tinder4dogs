@@ -470,6 +470,32 @@ review file:
     echo ""
     echo -e "{{ GREEN }}✅ Review saved to: $REVIEW_FILE{{ NC }}"
 
+# Comparison: cloud vs local
+compare-models prompt="Explain what a token is in 2 sentences":
+    #!/usr/bin/env bash
+    echo "🔵 Cloud (writer — Claude Sonnet):"
+    curl -s -X POST {{LITELLM_URL}} \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer {{LITELLM_KEY}}" \
+      -d '{"model":"writer","messages":[{"role":"user","content":"{{prompt}}"}]}' \
+      | jq -r '.choices[0].message.content'
+    echo ""
+    echo "🟢 Local (local-fast — Llama 3.2 3B):"
+    curl -s -X POST {{LITELLM_URL}} \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer {{LITELLM_KEY}}" \
+      -d '{"model":"local-fast","messages":[{"role":"user","content":"{{prompt}}"}]}' \
+      | jq -r '.choices[0].message.content'
+
+# Test local embedding
+test-embed text="Hello world":
+    #!/usr/bin/env bash
+    curl -s http://localhost:4000/embeddings \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer {{LITELLM_KEY}}" \
+      -d '{"model":"local-embed","input":"{{text}}"}' \
+      | jq '{model:.model, dimensions:(.data[0].embedding|length), first_5:.data[0].embedding[:5]}'
+
 ## ============================================
 ## ROLE: WRITER (Claude - Code Generation)
 ## ============================================
