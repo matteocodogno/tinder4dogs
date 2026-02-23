@@ -411,7 +411,7 @@ commit:
     #!/usr/bin/env bash
     echo "💬 Generating commit message..."
 
-    MSG=$(just commit-msg)
+    MSG=$(just commit-msg) || MSG=""
 
     if [ -z "$MSG" ]; then
       echo "❌ Failed to generate commit message"
