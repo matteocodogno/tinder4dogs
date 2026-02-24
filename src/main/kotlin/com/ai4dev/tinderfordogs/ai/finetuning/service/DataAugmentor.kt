@@ -12,7 +12,9 @@ class DataAugmentor(
     private val llm: LiteLLMService,
     private val mapper: ObjectMapper,
 ) {
-    private val AUGMENT_MODEL = "writer" // Claude / GPT-4o via LiteLLM
+    companion object {
+        private const val AUGMENT_MODEL = "local-fast" // Claude / GPT-4o via LiteLLM
+    }
 
     /**
      * For each example, generates [variantsPerExample] paraphrased user questions
@@ -45,6 +47,7 @@ class DataAugmentor(
             covering different tones: neutral, informal, frustrated.
             Respond ONLY with a JSON array of strings. Example:
             ["alternative 1", "alternative 2", "alternative 3"]
+            Do not wrap response in backticks, return only the JSON array.
             """.trimIndent()
 
         return try {
