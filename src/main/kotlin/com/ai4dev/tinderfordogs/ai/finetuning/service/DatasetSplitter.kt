@@ -31,6 +31,10 @@ class DatasetSplitter {
                         .coerceAtLeast(1)
                         .coerceAtMost(shuffled.size - trainEnd)
 
+            println(
+                "✂️ Splitting intent '${group.first().intent}' into $trainEnd training, ${valEnd - trainEnd} validation and ${shuffled.size - valEnd} test examples",
+            )
+
             train += shuffled.subList(0, trainEnd)
             valid += shuffled.subList(trainEnd, valEnd.coerceAtMost(shuffled.size))
             test += shuffled.subList(valEnd.coerceAtMost(shuffled.size), shuffled.size)
