@@ -24,7 +24,7 @@ class FineTuningPipelineService(
         println("🧹 Cleaning report: $report")
 
         // 3. Augment
-        val augmented = augmentor.augment(cleaned, variantsPerExample = 4)
+        val augmented = augmentor.augment(cleaned, variantsPerExample = 10)
         println("🔧 Augmented to ${augmented.size} examples")
 
         // 4. Clean again (augmented data may have issues)
@@ -33,6 +33,9 @@ class FineTuningPipelineService(
 
         // 5. Split
         val split = splitter.split(finalExamples)
+        println(
+            "✂️ Split into ${split.train.size} training, ${split.validation.size} validation examples and ${split.test.size} test examples",
+        )
 
         // 6. Export
         val export = exporter.export(split)
