@@ -23,3 +23,7 @@ litellm:
 
 openai:
     api-key: ${OPENAI_API_KEY:not-set}   # only needed for job submission
+
+tinder4dogs:
+    support:
+        model: support-assistant
