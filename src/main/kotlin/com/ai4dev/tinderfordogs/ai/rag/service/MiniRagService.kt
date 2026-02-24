@@ -99,16 +99,18 @@ class MiniRagService(
     ): String {
         val retrieved = retrieve(query, index)
         val context = retrieved.joinToString("\n\n---\n\n") { "[From ${it.source}]:\n${it.text}" }
-        val prompt =
-            """
-            Answer the question using ONLY the context below.
-            If the context is insufficient, say so explicitly.
+        val prompt    = """
+            You are the Tinder for Dogs support assistant.
+            Answer the user's question using ONLY the context below.
+            Be friendly, concise, and always cite the source document.
+            If the context does not contain enough information to answer, say so clearly
+            and suggest the user contact support@tinder4dogs.com.
 
             Context:
             $context
 
             Question: $query
-            """.trimIndent()
+        """.trimIndent()
         return withContext(Dispatchers.IO) {
             llm
                 .chat(ChatRequest(CHAT_MODEL, listOf(Message("user", prompt))))
