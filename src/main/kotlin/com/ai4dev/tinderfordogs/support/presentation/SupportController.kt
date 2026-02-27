@@ -1,7 +1,7 @@
 package com.ai4dev.tinderfordogs.support.presentation
 
 import com.ai4dev.tinderfordogs.ai.finetuning.service.Message
-import com.ai4dev.tinderfordogs.support.SupportAssistantService
+import com.ai4dev.tinderfordogs.support.service.SupportAssistantService
 import org.springframework.beans.factory.annotation.Value
 
 import org.springframework.web.bind.annotation.*

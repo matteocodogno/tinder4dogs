@@ -1,20 +1,13 @@
 package com.ai4dev.tinderfordogs.ai.rag.service
 
-import com.ai4dev.tinderfordogs.ai.finetuning.service.ChatRequest
 import com.ai4dev.tinderfordogs.ai.finetuning.service.EmbedRequest
 import com.ai4dev.tinderfordogs.ai.finetuning.service.LiteLLMService
-import com.ai4dev.tinderfordogs.ai.finetuning.service.Message
+import com.ai4dev.tinderfordogs.ai.rag.model.Chunk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver
 import org.springframework.stereotype.Service
 import kotlin.math.sqrt
-
-data class Chunk(
-    val source: String,
-    val text: String,
-    var embedding: List<Double> = emptyList(),
-)
 
 @Service
 class MiniRagService(
@@ -22,9 +15,8 @@ class MiniRagService(
 ) {
     companion object {
         private const val EMBED_MODEL = "local-embed"
-        private const val CHAT_MODEL = "local-fast"
-        private const val CHUNK_SIZE = 300
-        private const val OVERLAP = 50
+        private const val CHUNK_SIZE = 120 // words
+        private const val OVERLAP = 20
     }
 
     // ── Indexing ──────────────────────────────────────────────────────────────
@@ -36,20 +28,6 @@ class MiniRagService(
             splitIntoChunks(content).map { Chunk(source = resource.filename ?: "unknown", text = it) }
         }
     }
-
-    suspend fun indexChunks(chunks: List<Chunk>): List<Chunk> =
-        withContext(Dispatchers.IO) {
-            chunks.map { chunk ->
-                chunk.copy(
-                    embedding =
-                        llm
-                            .embed(EmbedRequest(EMBED_MODEL, chunk.text))
-                            .data
-                            .first()
-                            .embedding,
-                )
-            }
-        }
 
     private fun splitIntoChunks(text: String): List<String> {
         val words = text.split("\\s+".toRegex())
@@ -89,34 +67,5 @@ class MiniRagService(
         val normA = sqrt(a.sumOf { it * it })
         val normB = sqrt(b.sumOf { it * it })
         return if (normA == 0.0 || normB == 0.0) 0.0 else dot / (normA * normB)
-    }
-
-    // ── Generation ────────────────────────────────────────────────────────────
-
-    suspend fun answer(
-        query: String,
-        index: List<Chunk>,
-    ): String {
-        val retrieved = retrieve(query, index)
-        val context = retrieved.joinToString("\n\n---\n\n") { "[From ${it.source}]:\n${it.text}" }
-        val prompt    = """
-            You are the Tinder for Dogs support assistant.
-            Answer the user's question using ONLY the context below.
-            Be friendly, concise, and always cite the source document.
-            If the context does not contain enough information to answer, say so clearly
-            and suggest the user contact support@tinder4dogs.com.
-
-            Context:
-            $context
-
-            Question: $query
-        """.trimIndent()
-        return withContext(Dispatchers.IO) {
-            llm
-                .chat(ChatRequest(CHAT_MODEL, listOf(Message("user", prompt))))
-                .choices
-                .first()
-                .message.content
-        }
     }
 }

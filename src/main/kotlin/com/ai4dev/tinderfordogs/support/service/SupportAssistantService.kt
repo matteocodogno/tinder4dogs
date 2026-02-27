@@ -1,10 +1,11 @@
-package com.ai4dev.tinderfordogs.support
+package com.ai4dev.tinderfordogs.support.service
 
 import com.ai4dev.tinderfordogs.ai.finetuning.service.ChatRequest
 import com.ai4dev.tinderfordogs.ai.finetuning.service.LiteLLMService
 import com.ai4dev.tinderfordogs.ai.finetuning.service.Message
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
+import kotlin.collections.plus
 
 @Service
 class SupportAssistantService(
