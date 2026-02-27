@@ -1,6 +1,6 @@
 package com.ai4dev.tinderfordogs.ai.finetuning.presentation
 
-import com.ai4dev.tinderfordogs.ai.finetuning.service.FineTuningJob
+import com.ai4dev.tinderfordogs.ai.finetuning.model.FineTuningJob
 import com.ai4dev.tinderfordogs.ai.finetuning.service.FineTuningPipelineService
 import com.ai4dev.tinderfordogs.ai.finetuning.service.OpenAIService
 import org.springframework.web.bind.annotation.GetMapping

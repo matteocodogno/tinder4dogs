@@ -1,22 +1,10 @@
 package com.ai4dev.tinderfordogs.ai.finetuning.service
 
+import com.ai4dev.tinderfordogs.ai.finetuning.model.FineTuningJob
 import org.springframework.http.HttpHeaders
 import org.springframework.http.client.MultipartBodyBuilder
 import org.springframework.stereotype.Service
 import java.io.File
-
-data class FileUploadResponse(
-    val id: String,
-    val filename: String,
-    val bytes: Long,
-)
-
-data class FineTuningJob(
-    val id: String,
-    val status: String,
-    val model: String,
-    val fineTunedModel: String?,
-)
 
 @Service
 class FineTuningJobService(

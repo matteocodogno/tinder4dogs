@@ -1,5 +1,7 @@
 package com.ai4dev.tinderfordogs.ai.finetuning.service
 
+import com.ai4dev.tinderfordogs.ai.finetuning.model.FileUploadResponse
+import com.ai4dev.tinderfordogs.ai.finetuning.model.FineTuningJob
 import org.springframework.http.HttpEntity
 import org.springframework.http.MediaType
 import org.springframework.util.MultiValueMap
@@ -13,7 +15,7 @@ import org.springframework.web.service.annotation.PostExchange
 interface OpenAIService {
     @PostExchange("/files", contentType = MediaType.MULTIPART_FORM_DATA_VALUE)
     fun uploadFiles(
-        @RequestBody request: MultiValueMap<String, HttpEntity<*>>
+        @RequestBody request: MultiValueMap<String, HttpEntity<*>>,
     ): FileUploadResponse
 
     @PostExchange("/fine_tuning/jobs")

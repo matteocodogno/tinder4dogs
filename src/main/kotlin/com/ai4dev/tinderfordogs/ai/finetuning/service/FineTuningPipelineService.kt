@@ -1,5 +1,6 @@
 package com.ai4dev.tinderfordogs.ai.finetuning.service
 
+import com.ai4dev.tinderfordogs.ai.finetuning.model.FineTuningJob
 import org.springframework.stereotype.Service
 
 @Service
