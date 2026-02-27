@@ -1,4 +1,4 @@
-package com.ai4dev.tinderfordogs.ai.finetuning.service
+package com.ai4dev.tinderfordogs.ai.common.service
 
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.service.annotation.HttpExchange

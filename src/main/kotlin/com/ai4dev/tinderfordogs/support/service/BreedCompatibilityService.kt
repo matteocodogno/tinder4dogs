@@ -1,8 +1,8 @@
 package com.ai4dev.tinderfordogs.support.service
 
-import com.ai4dev.tinderfordogs.ai.finetuning.service.ChatRequest
-import com.ai4dev.tinderfordogs.ai.finetuning.service.LiteLLMService
-import com.ai4dev.tinderfordogs.ai.finetuning.service.Message
+import com.ai4dev.tinderfordogs.ai.common.service.ChatRequest
+import com.ai4dev.tinderfordogs.ai.common.service.LiteLLMService
+import com.ai4dev.tinderfordogs.ai.common.service.Message
 import com.ai4dev.tinderfordogs.ai.rag.model.Chunk
 import com.ai4dev.tinderfordogs.ai.rag.service.MiniRagService
 import com.ai4dev.tinderfordogs.support.model.CompatibilityResponse

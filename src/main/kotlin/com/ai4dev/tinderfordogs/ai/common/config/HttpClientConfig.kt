@@ -1,6 +1,6 @@
-package com.ai4dev.tinderfordogs.ai.finetuning.config
+package com.ai4dev.tinderfordogs.ai.common.config
 
-import com.ai4dev.tinderfordogs.ai.finetuning.service.LiteLLMService
+import com.ai4dev.tinderfordogs.ai.common.service.LiteLLMService
 import com.ai4dev.tinderfordogs.ai.finetuning.service.OpenAIService
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
@@ -9,7 +9,7 @@ import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.web.client.RestClient
 import org.springframework.web.client.support.RestClientHttpServiceGroupConfigurer
-import org.springframework.web.service.registry.HttpServiceGroupConfigurer.Groups
+import org.springframework.web.service.registry.HttpServiceGroupConfigurer
 import org.springframework.web.service.registry.ImportHttpServices
 
 @Configuration
@@ -26,7 +26,7 @@ class HttpClientConfig(
 
     @Bean
     fun groupConfigurer(): RestClientHttpServiceGroupConfigurer =
-        RestClientHttpServiceGroupConfigurer { groups: Groups<RestClient.Builder> ->
+        RestClientHttpServiceGroupConfigurer { groups: HttpServiceGroupConfigurer.Groups<RestClient.Builder> ->
             groups.filterByName("litellm").forEachClient { _, builder ->
                 builder
                     .baseUrl(litellmBaseUrl)

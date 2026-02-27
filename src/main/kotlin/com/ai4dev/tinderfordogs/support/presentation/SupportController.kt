@@ -1,10 +1,12 @@
 package com.ai4dev.tinderfordogs.support.presentation
 
-import com.ai4dev.tinderfordogs.ai.finetuning.service.Message
+import com.ai4dev.tinderfordogs.ai.common.service.Message
 import com.ai4dev.tinderfordogs.support.service.SupportAssistantService
 import org.springframework.beans.factory.annotation.Value
-
-import org.springframework.web.bind.annotation.*
+import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RestController
 
 data class SupportRequest(
     val message: String,
@@ -19,7 +21,7 @@ data class SupportResponse(
 @RestController
 @RequestMapping("/api/v1/support")
 class SupportController(
-    private val service: SupportAssistantService,
+    private val support: SupportAssistantService,
     @Value($$"${tinder4dogs.support.model}")
     private val model: String,
 ) {
@@ -28,7 +30,7 @@ class SupportController(
         @RequestBody req: SupportRequest,
     ): SupportResponse =
         SupportResponse(
-            answer = service.answer(req.message, req.history),
+            answer = support.answer(req.message, req.history),
             model = model,
         )
 }

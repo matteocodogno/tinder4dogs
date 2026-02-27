@@ -1,5 +1,8 @@
 package com.ai4dev.tinderfordogs.ai.finetuning.service
 
+import com.ai4dev.tinderfordogs.ai.common.service.ChatRequest
+import com.ai4dev.tinderfordogs.ai.common.service.LiteLLMService
+import com.ai4dev.tinderfordogs.ai.common.service.Message
 import com.ai4dev.tinderfordogs.ai.finetuning.model.ChatMessage
 import com.ai4dev.tinderfordogs.ai.finetuning.model.TrainingExample
 import org.springframework.stereotype.Component

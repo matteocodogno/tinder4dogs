@@ -1,7 +1,7 @@
 package com.ai4dev.tinderfordogs.ai.rag.service
 
-import com.ai4dev.tinderfordogs.ai.finetuning.service.EmbedRequest
-import com.ai4dev.tinderfordogs.ai.finetuning.service.LiteLLMService
+import com.ai4dev.tinderfordogs.ai.common.service.EmbedRequest
+import com.ai4dev.tinderfordogs.ai.common.service.LiteLLMService
 import com.ai4dev.tinderfordogs.ai.rag.model.Chunk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
