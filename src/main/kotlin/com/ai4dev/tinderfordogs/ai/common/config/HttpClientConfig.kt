@@ -16,9 +16,9 @@ import org.springframework.web.service.registry.ImportHttpServices
 @ImportHttpServices(group = "litellm", types = [LiteLLMService::class])
 @ImportHttpServices(group = "openai", types = [OpenAIService::class])
 class HttpClientConfig(
-    @Value($$"${litellm.url}") private val litellmBaseUrl: String,
-    @Value($$"${litellm.key}") private val llitellmApiKey: String,
-    @Value($$"${openai.api-key}") private val openaiApiKey: String,
+    @Value("\${litellm.url}") private val litellmBaseUrl: String,
+    @Value("\${litellm.key}") private val llitellmApiKey: String,
+    @Value("\${openai.api-key}") private val openaiApiKey: String,
 ) {
     companion object {
         private const val openaiBaseUrl = "https://api.openai.com/v1"

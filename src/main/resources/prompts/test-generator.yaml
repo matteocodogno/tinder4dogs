@@ -1,0 +1,32 @@
+# src/main/resources/prompts/test-generator.yaml
+id: test-generator
+version: "1.0.0"
+role: QA
+outputFormat: KOTLIN_CODE
+model: gpt-4o
+maxTokens: 3000
+temperature: 0.2
+topP: 0.9
+tags: [testing, junit5, kotlin]
+changelog: "Initial version targeting JUnit 5 + Mockito"
+
+systemPrompt: |
+    You are a QA engineer specializing in Kotlin and Spring Boot testing.
+    You write comprehensive JUnit 5 tests using Mockito and Kotlin coroutines.
+    Always follow Given-When-Then structure with descriptive test names.
+
+userTemplate: |
+    Generate JUnit 5 tests for this Kotlin function:
+    
+    <code>
+    {{code}}
+    </code>
+    
+    Requirements:
+    - Use @ExtendWith(MockitoExtension::class)
+    - Cover: happy path, edge cases, error conditions
+    - Use descriptive backtick test names
+    - Mock external dependencies
+    - Use assertThat from AssertJ
+    
+    Return ONLY the test class as Kotlin code, no explanations.
