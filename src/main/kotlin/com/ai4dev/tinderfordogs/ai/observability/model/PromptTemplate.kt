@@ -53,17 +53,3 @@ data class PromptConfig(
     val frequencyPenalty: Double = 0.0,
     val presencePenalty: Double = 0.0,
 )
-
-object PromptPresets {
-    val STRUCTURED = PromptConfig(temperature = 0.1, topP = 0.9, maxTokens = 2000)
-    val ANALYTICAL = PromptConfig(temperature = 0.3, topP = 0.9, maxTokens = 3000)
-    val CREATIVE =
-        PromptConfig(
-            temperature = 0.8,
-            topP = 0.95,
-            maxTokens = 1500,
-            frequencyPenalty = 0.5,
-            presencePenalty = 0.3,
-        )
-    val FACTUAL = PromptConfig(temperature = 0.0, topP = 0.1, maxTokens = 1000)
-}
