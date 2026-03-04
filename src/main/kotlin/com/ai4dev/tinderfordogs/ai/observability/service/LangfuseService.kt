@@ -12,6 +12,7 @@ import com.langfuse.client.resources.prompts.types.CreateChatPromptRequest
 import com.langfuse.client.resources.prompts.types.CreateChatPromptType
 import com.langfuse.client.resources.prompts.types.CreatePromptRequest
 import com.langfuse.client.resources.prompts.types.CreateTextPromptRequest
+import com.langfuse.client.resources.prompts.types.Prompt
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
@@ -40,8 +41,6 @@ class LangfuseService(
 ) {
     // key = "name:label" or "name:v{version}"
     private val promptCache = ConcurrentHashMap<String, CachedPrompt>()
-
-    private val openTraces = ConcurrentHashMap<String, Instant>()
 
     /**
      * Fetch a prompt from Langfuse by label (default: "production").
@@ -92,7 +91,7 @@ class LangfuseService(
         return prompt
     }
 
-    private fun convertToLangfusePrompt(response: com.langfuse.client.resources.prompts.types.Prompt): LangfusePrompt =
+    private fun convertToLangfusePrompt(response: Prompt): LangfusePrompt =
         when {
             response.isText -> {
                 val textPrompt = response.text.get()
@@ -189,11 +188,7 @@ class LangfuseService(
         sessionId: String,
         input: Map<String, Any>,
     ): String {
-        val traceId =
-            UUID
-                .randomUUID()
-                .toString()
-        openTraces[traceId] = Instant.now()
+        val traceId = UUID.randomUUID().toString()
 
         runCatching<Unit> {
             // Create trace using TraceBody and TraceEvent
@@ -217,34 +212,5 @@ class LangfuseService(
         }.onFailure { logger.warn { "Failed to start trace $traceId: ${it.message}" } }
 
         return traceId
-    }
-
-    suspend fun endTrace(
-        traceId: String,
-        output: String,
-        metadata: Map<String, Any>,
-    ) {
-        openTraces.remove(traceId)
-
-        runCatching<Unit> {
-            // Update trace by sending another traceCreate event with the same ID
-            val traceBody =
-                TraceBody
-                    .builder()
-                    .id(Optional.of(traceId))
-                    .output(Optional.of(output))
-                    .metadata(Optional.ofNullable(metadata))
-                    .build()
-            val traceEvent =
-                TraceEvent
-                    .builder()
-                    .id(traceId)
-                    .timestamp(Instant.now().toString())
-                    .body(traceBody)
-                    .build()
-            val ingestionEvent = IngestionEvent.traceCreate(traceEvent)
-            val request = IngestionRequest.builder().batch(listOf(ingestionEvent)).build()
-            langfuseClient.ingestion().batch(request)
-        }.onFailure { logger.warn { "Failed to end trace $traceId: ${it.message}" } }
     }
 }

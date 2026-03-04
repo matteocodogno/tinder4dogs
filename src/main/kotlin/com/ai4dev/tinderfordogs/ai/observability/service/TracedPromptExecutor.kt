@@ -60,22 +60,6 @@ class TracedPromptExecutor(
             )
         val latencyMs = System.currentTimeMillis() - start
 
-        // 5. End trace
-        langfuse.endTrace(
-            traceId = traceId,
-            output =
-                response.choices
-                    .first()
-                    .message.content,
-            metadata =
-                mapOf(
-                    "latencyMs" to latencyMs,
-                    "promptName" to promptId,
-                    "promptVersion" to template.version,
-                    "promptLabel" to label,
-                ),
-        )
-
         return PromptResult(
             output =
                 response.choices
