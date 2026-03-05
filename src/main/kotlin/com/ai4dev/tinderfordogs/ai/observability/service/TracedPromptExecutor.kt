@@ -46,25 +46,46 @@ class TracedPromptExecutor(
             )
 
         // 4. Call LLM
-        val start = System.currentTimeMillis()
+        val messages =
+            listOf(
+                Message("system", template.systemPrompt),
+                Message("user", userMessage),
+            )
+        val startTime = java.time.Instant.now()
         val response =
             llm.chat(
                 ChatRequest(
                     model = template.model,
-                    messages =
-                        listOf(
-                            Message("system", template.systemPrompt),
-                            Message("user", userMessage),
-                        ),
+                    messages = messages,
+                    metadata = mapOf("trace_id" to traceId),
                 ),
             )
-        val latencyMs = System.currentTimeMillis() - start
+        val endTime = java.time.Instant.now()
+        val latencyMs = System.currentTimeMillis() - startTime.toEpochMilli()
+        val output =
+            response.choices
+                .first()
+                .message.content
+
+        // 5. Create Generation with complete data (input + output + prompt linkage)
+        langfuse.createGeneration(
+            traceId = traceId,
+            name = "tinder4dogs",
+            promptName = promptId,
+            promptVersion = template.version.toInt(),
+            model = template.model,
+            input = messages.map { mapOf("role" to it.role, "content" to it.content) },
+            output = output,
+            endTime = endTime,
+            metadata =
+                mapOf(
+                    "latencyMs" to latencyMs,
+                    "promptLabel" to label,
+                ),
+        )
 
         return PromptResult(
-            output =
-                response.choices
-                    .first()
-                    .message.content,
+            output = output,
             traceId = traceId,
             latencyMs = latencyMs,
             promptId = promptId,

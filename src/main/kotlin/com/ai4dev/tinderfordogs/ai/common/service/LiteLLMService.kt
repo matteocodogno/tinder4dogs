@@ -12,6 +12,7 @@ data class Message(
 data class ChatRequest(
     val model: String,
     val messages: List<Message>,
+    val metadata: Map<String, String>? = null,
 )
 
 data class EmbedRequest(

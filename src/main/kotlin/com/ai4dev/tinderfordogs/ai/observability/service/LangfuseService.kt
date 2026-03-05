@@ -2,6 +2,8 @@ package com.ai4dev.tinderfordogs.ai.observability.service
 
 import com.ai4dev.tinderfordogs.ai.observability.model.CachedPrompt
 import com.langfuse.client.resources.ingestion.requests.IngestionRequest
+import com.langfuse.client.resources.ingestion.types.CreateGenerationBody
+import com.langfuse.client.resources.ingestion.types.CreateGenerationEvent
 import com.langfuse.client.resources.ingestion.types.IngestionEvent
 import com.langfuse.client.resources.ingestion.types.TraceBody
 import com.langfuse.client.resources.ingestion.types.TraceEvent
@@ -190,7 +192,7 @@ class LangfuseService(
     ): String {
         val traceId = UUID.randomUUID().toString()
 
-        runCatching<Unit> {
+        runCatching {
             // Create trace using TraceBody and TraceEvent
             val traceBody =
                 TraceBody
@@ -212,5 +214,51 @@ class LangfuseService(
         }.onFailure { logger.warn { "Failed to start trace $traceId: ${it.message}" } }
 
         return traceId
+    }
+
+    fun createGeneration(
+        traceId: String,
+        name: String,
+        promptName: String,
+        promptVersion: Int,
+        model: String,
+        input: List<Map<String, String>>,
+        output: String,
+        endTime: Instant,
+        metadata: Map<String, Any> = emptyMap(),
+    ): String {
+        val generationId = UUID.randomUUID().toString()
+        logger.info { "Creating generation $generationId for trace $traceId with prompt $promptName v$promptVersion" }
+
+        runCatching {
+            val generationBody =
+                CreateGenerationBody
+                    .builder()
+                    .id(Optional.of(generationId))
+                    .traceId(Optional.of(traceId))
+                    .name(Optional.of(name))
+                    .promptName(Optional.of(promptName))
+                    .promptVersion(Optional.of(promptVersion))
+                    .model(Optional.of(model))
+                    .input(Optional.ofNullable(input))
+                    .output(Optional.of(output))
+                    .metadata(Optional.ofNullable(metadata))
+                    .build()
+            val generationEvent =
+                CreateGenerationEvent
+                    .builder()
+                    .id(generationId)
+                    .timestamp(endTime.toString())
+                    .body(generationBody)
+                    .build()
+            val ingestionEvent = IngestionEvent.generationCreate(generationEvent)
+            val request = IngestionRequest.builder().batch(listOf(ingestionEvent)).build()
+            val response = langfuseClient.ingestion().batch(request)
+            logger.info { "Create generation response: $response" }
+        }.onFailure {
+            logger.error(it) { "Failed to create generation $generationId: ${it.message}" }
+        }
+
+        return generationId
     }
 }
