@@ -8,7 +8,8 @@
 - **Key Findings**:
   - No authentication or session management infrastructure exists yet; the design must define a session token mechanism and explicitly accommodate future JWT integration.
   - The existing codebase follows a strict vertical-slice pattern (`<feature>/presentation/service/model/`). The new `intent` module must conform to this pattern.
-  - No external dependency additions are required: the feature is backed entirely by PostgreSQL (already in stack) and Spring Data JPA (already in use).
+  - This feature introduces Liquibase (`liquibase-core`) as the first use of version-controlled schema migration; `ddl-auto` is changed from `update` to `validate`.
+  - Analytics events are integrated with OpenTelemetry via the Micrometer Observation API bridge; session lifecycle events become OTEL span events and aggregate counts become OTEL metrics exported via OTLP.
 
 ---
 
@@ -108,11 +109,35 @@
 - **Trade-offs**: Not secure (no authentication enforcement); acceptable for internal MVP development phase.
 - **Follow-up**: Replace with JWT extraction in the auth feature implementation.
 
-### Decision: Analytics via structured logging (not event bus)
-- **Context**: No event bus available; Req 6 requires distinct session lifecycle events.
-- **Selected Approach**: `KotlinLogging.logger {}` emitting structured log entries with `event.type` key.
-- **Rationale**: Consistent with existing observability approach; replaceable without interface changes.
-- **Trade-offs**: Not queryable as time-series events; dependent on log aggregator (ELK/Loki) for analysis.
+### Decision: Liquibase for schema management (replaces ddl-auto: update)
+- **Context**: `application.yaml` currently uses `spring.jpa.hibernate.ddl-auto: update`. This feature is the first to require a new table, making it the right time to introduce version-controlled schema migration.
+- **Alternatives Considered**:
+  1. Keep `ddl-auto: update` — lets Hibernate auto-create the table
+  2. `ddl-auto: create-drop` — destructive, test-only
+  3. Flyway — alternative migration tool
+  4. Liquibase via Spring Boot Liquibase starter (`liquibase-core` on classpath)
+- **Selected Approach**: `spring-boot-starter-liquibase` added to `pom.xml` with no explicit version (managed by the Spring Boot parent BOM at 4.0.2); Spring Boot auto-configures Liquibase. `ddl-auto` changed to `validate`. Changesets written in **Liquibase formatted SQL** (`.sql` files); master changelog at `src/main/resources/db/changelog/db.changelog-master.yaml` uses `includeAll` to pick up files from `changes/`.
+- **Rationale**: `ddl-auto: update` is unsafe for production — it can silently drop columns or fail on non-trivial changes. Liquibase provides reproducible, reviewable, rollback-capable migrations. Spring Boot BOM manages the Liquibase version, so no explicit version pin is needed in pom.xml.
+- **Trade-offs**: Adds a migration file to maintain per schema change; worth it for production safety.
+- **Follow-up**: Tag the DB state before first deploy (`liquibase tag pre-intent`) to enable `rollback --tag` if needed.
+
+### Decision: OpenTelemetry via Micrometer Observation API (replaces structured-logging-only approach)
+- **Context**: Req 6 requires distinct session lifecycle events traceable in an analytics dashboard (NFR-O1, NFR-O2). Initial design used structured logs only; requirement updated to integrate with OpenTelemetry.
+- **Alternatives Considered**:
+  1. Structured logging only (`KotlinLogging`) — not queryable as time-series; no distributed tracing
+  2. Direct OTEL SDK (`io.opentelemetry:opentelemetry-api`) — bypasses Micrometer; breaks Spring Boot auto-configuration
+  3. **Micrometer Observation API + OTEL bridge** (`micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp`) — selected
+- **Selected Approach**: `ObservationRegistry` injected into `IntentSessionService`. Each service method wrapped in an `Observation` (→ OTEL span). Lifecycle events (`session.started`, `session.activated`, `session.ended`) emitted as `Observation.Event` (→ OTEL span events). Session aggregate counts tracked via `MeterRegistry` counters/gauges (→ OTEL metrics). All signals exported via OTLP to an OTEL Collector.
+- **Rationale**: Spring Boot 4 natively auto-configures `ObservationRegistry` and `MeterRegistry` when `spring-boot-starter-actuator` is present. The Micrometer bridge decouples application code from the OTEL SDK — the service layer only depends on `io.micrometer` interfaces, which are vendor-neutral.
+- **Trade-offs**: Adds 3 new dependencies (`spring-boot-starter-actuator`, `micrometer-tracing-bridge-otel`, `opentelemetry-exporter-otlp`), all BOM-managed. Requires an OTEL Collector in the deployment environment. Tests must use `TestObservationRegistry`/`SimpleMeterRegistry` to avoid coupling to the collector.
+- **Cardinality rule**: `session.id` and `owner.id` are span **event** attributes, never top-level span attributes — prevents cardinality explosion in the tracing backend.
+- **Follow-up**: Add `OTEL_EXPORTER_OTLP_ENDPOINT` to the deployment environment config; set `management.tracing.enabled=false` in the `test` profile.
+
+### Decision: Analytics via structured logging (complement only)
+- **Context**: Structured logs remain useful for WARN/ERROR signals and log-based alerting pipelines.
+- **Selected Approach**: `KotlinLogging.logger {}` emitting WARN/ERROR entries; logs include `trace_id` and `span_id` injected by the Micrometer Tracing bridge for correlation.
+- **Rationale**: Logs and traces are complementary; logs remain the primary signal for error alerting while OTEL spans carry the analytics payload.
+- **Trade-offs**: None beyond what is already in the codebase.
 
 ---
 
@@ -122,6 +147,8 @@
 - **Session table growth** — expired rows accumulate without GC. Mitigation: `@Scheduled` cleanup job runs every 30 minutes, deletes rows where `expires_at < NOW()`.
 - **Concurrent session creation** — owner creates two sessions simultaneously. Mitigation: enforce unique constraint on `(owner_id, status = ACTIVE)` or invalidate the previous active session on new declaration.
 - **Matching Service not yet built** — intent filtering contract is designed but consuming service is future work. Mitigation: design.md specifies the `IntentSessionService.getValidSession()` contract that the Matching Service will consume.
+- **OTEL Collector unavailable at startup** — OTLP export failure should not crash the application. Mitigation: `opentelemetry-exporter-otlp` is non-blocking by default; export errors are logged but not propagated; verify with `management.tracing.enabled=false` in `test` profile.
+- **High cardinality in spans** — using `session.id` or `owner.id` as top-level span attributes would explode the cardinality of the tracing backend index. Mitigation: design enforces these as span event attributes only (see cardinality rule in design decisions).
 
 ---
 

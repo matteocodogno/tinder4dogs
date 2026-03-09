@@ -29,12 +29,12 @@ The Intent Declaration feature introduces a mandatory session-scoped intent sele
 
 ### Existing Architecture Analysis
 
-The codebase is a Spring Boot 4 monolith (Kotlin 2.2, Java 24) with a `service/` domain core and feature modules following a vertical slice pattern (`<feature>/presentation/service/model/`). No authentication or session management infrastructure exists. Persistence is PostgreSQL via Spring Data JPA with `ddl-auto: update`. See `research.md` for full discovery notes.
+The codebase is a Spring Boot 4 monolith (Kotlin 2.2, Java 24) with a `service/` domain core and feature modules following a vertical slice pattern (`<feature>/presentation/service/model/`). No authentication or session management infrastructure exists. Persistence is PostgreSQL via Spring Data JPA. **This feature introduces Liquibase for schema management**; `spring.jpa.hibernate.ddl-auto` is changed from `update` to `validate` as part of this work. See `research.md` for full discovery notes.
 
 **Constraints**:
 - No Spring Security, no JWT infrastructure — owner identity is a placeholder (`X-Owner-Id` header) until an auth feature is implemented.
 - No event bus — analytics events are emitted as structured log entries.
-- `ddl-auto: update` creates the new `intent_sessions` table automatically.
+- Schema changes are managed exclusively via Liquibase changesets; Hibernate DDL auto-generation is disabled.
 
 ### Architecture Pattern & Boundary Map
 
@@ -59,6 +59,9 @@ graph TB
     end
 
     subgraph Observability
+        ObservationRegistry[ObservationRegistry]
+        MeterRegistry[MeterRegistry]
+        OtelCollector[OTEL Collector]
         StructuredLogger[Structured Logger]
     end
 
@@ -66,7 +69,11 @@ graph TB
     IntentSessionService --> IntentSessionRepository
     IntentSessionRepository --> IntentSessionsTable
     IntentSessionCleanupJob --> IntentSessionRepository
+    IntentSessionService --> ObservationRegistry
+    IntentSessionService --> MeterRegistry
     IntentSessionService --> StructuredLogger
+    ObservationRegistry --> OtelCollector
+    MeterRegistry --> OtelCollector
     DogMatcherService -.->|consumes session context| IntentSessionService
 ```
 
@@ -83,8 +90,12 @@ graph TB
 |-------|------------------|-----------------|-------|
 | Backend | Spring Boot 4.0.2 / Kotlin 2.2 | REST controllers, service layer, scheduling | Existing — no change |
 | Data | PostgreSQL + Spring Data JPA | Persist `intent_sessions` table | Existing — new entity only |
+| Migration | `spring-boot-starter-liquibase` (Spring Boot BOM) | Version-controlled schema migration for `intent_sessions` | **New dependency** — version managed by Spring Boot parent BOM; `ddl-auto` set to `validate` |
 | Scheduling | Spring `@Scheduled` | Cleanup expired sessions every 30 min | Built-in — no new dependency |
-| Observability | kotlin-logging-jvm | Structured analytics event logging | Existing |
+| Observability — Tracing | `micrometer-tracing-bridge-otel` (Spring Boot BOM) | Bridges Micrometer `ObservationRegistry` to OTEL SDK; instruments service methods as spans | **New dependency** |
+| Observability — Export | `opentelemetry-exporter-otlp` (Spring Boot BOM) | Exports spans and metrics to an OTEL Collector via OTLP/gRPC | **New dependency** |
+| Observability — Actuator | `spring-boot-starter-actuator` (Spring Boot BOM) | Activates Micrometer auto-configuration (`ObservationRegistry`, `MeterRegistry`) | **New dependency** |
+| Observability — Logging | kotlin-logging-jvm | Structured log complement; WARN/ERROR signals only | Existing |
 | Auth (placeholder) | `X-Owner-Id` header | Owner identity until JWT auth is added | Replaced by JWT in future auth feature |
 
 ---
@@ -226,13 +237,16 @@ data class IntentSessionResponse(
 - Creates a new `IntentSession`, invalidating any previous `ACTIVE` session for the same `ownerId`.
 - Validates a token on every swipe feed call: returns `IntentSessionContext` or throws `SessionNotFoundException` / `SessionExpiredException`.
 - Derives `autoSexFilter` (opposite sex) automatically when intent is BREEDING.
-- Emits structured log analytics events (`session.started`, `session.activated`, `session.ended`).
+- Wraps each public method in a Micrometer `Observation` (becomes an OTEL span via the tracing bridge); emits `session.started`, `session.activated`, `session.ended` as **OTEL span events** on the active span.
+- Increments Micrometer counters/gauges for session aggregate metrics (see Event Contract).
 - Does not touch the owner's permanent profile — no write to any owner/dog table.
 - Transaction boundary: each public method is a single transaction (`@Transactional`).
 
 **Dependencies**
 - Outbound: `IntentSessionRepository` — persistence (P0)
-- Outbound: `KotlinLogging.logger {}` — analytics event emission (P1)
+- Outbound: `ObservationRegistry` (Micrometer) — span creation and span event emission (P0)
+- Outbound: `MeterRegistry` (Micrometer) — session aggregate metrics (P1)
+- Outbound: `KotlinLogging.logger {}` — WARN/ERROR log complement (P2)
 
 **Contracts**: Service [x] / Event [x]
 
@@ -291,10 +305,37 @@ interface IntentSessionService {
 
 ##### Event Contract
 
-- **`session.started`** — emitted on `declareIntent`. Fields: `event.type`, `sessionId`, `ownerId`, `intent`, `autoSexFilter` (nullable), `expiresAt`.
-- **`session.activated`** — emitted on first `recordFirstSwipe` call. Fields: `event.type`, `sessionId`, `ownerId`, `intent`.
-- **`session.ended`** — emitted on `closeSession` or scheduler expiry. Fields: `event.type`, `sessionId`, `ownerId`, `intent`, `swipeCount`, `reason` (`OWNER_CLOSED | EXPIRED`).
-- Ordering: events are synchronous structured log entries; no delivery guarantee beyond log shipping.
+Analytics signals are emitted via the Micrometer Observation API, exported to the OTEL Collector via OTLP. Three categories of signals:
+
+**OTEL Spans** — one span per service operation, carrying low-cardinality attributes:
+
+| Span name | Triggered by | Attributes |
+|-----------|-------------|------------|
+| `intent.session.declare` | `declareIntent()` | `intent`, `owner.id` |
+| `intent.session.validate` | `getValidSession()` | `session.id` |
+| `intent.session.close` | `closeSession()` | `session.id`, `reason` |
+| `intent.session.cleanup` | `IntentSessionCleanupJob` | `deleted.count` |
+
+**OTEL Span Events** — attached to the active span, carry high-cardinality context:
+
+| Event name | Attached to span | Attributes |
+|------------|-----------------|------------|
+| `session.started` | `intent.session.declare` | `session.id`, `intent`, `auto_sex_filter` (nullable), `expires_at` |
+| `session.activated` | `intent.session.validate` (first swipe) | `session.id`, `intent` |
+| `session.ended` | `intent.session.close` or `intent.session.cleanup` | `session.id`, `intent`, `swipe_count`, `reason` |
+
+**Micrometer Metrics** (exported as OTEL metrics):
+
+| Metric name | Type | Labels | Description |
+|-------------|------|--------|-------------|
+| `intent.session.started.total` | Counter | `intent` | Sessions declared |
+| `intent.session.activated.total` | Counter | `intent` | Sessions with ≥ 1 swipe |
+| `intent.session.ended.total` | Counter | `intent`, `reason` | Sessions closed or expired |
+| `intent.session.active` | Gauge | — | Current count of `ACTIVE` sessions (queried from DB) |
+| `intent.session.validation.errors.total` | Counter | `error_type` (`NOT_FOUND`, `EXPIRED`) | Token validation failures |
+
+- Delivery: synchronous in-process; exported asynchronously to OTEL Collector via OTLP/gRPC (non-blocking).
+- Attribute cardinality: `session.id` and `owner.id` are span event attributes only — never span-level attributes (avoid high-cardinality span key explosion).
 
 **Implementation Notes**
 - Integration: `DogMatcherService` / `SwipeFeedService` calls `getValidSession(token)` and uses `IntentSessionContext.intent` and `IntentSessionContext.autoSexFilter` to build the candidate query.
@@ -384,19 +425,88 @@ interface IntentSessionRepository : JpaRepository<IntentSession, Long> {
 
 ### Physical Data Model
 
-**Index strategy** (critical for performance — NFR-P2: < 50ms filter overhead):
+Schema is managed exclusively via Liquibase. The changelog master file is `src/main/resources/db/changelog/db.changelog-master.yaml`, which includes changesets from `changes/`.
+
+Changesets are written in **Liquibase formatted SQL** (`.sql` files with special comment headers). The master changelog (`db.changelog-master.yaml`) includes them by directory scan.
+
+**`src/main/resources/db/changelog/db.changelog-master.yaml`**:
+```yaml
+databaseChangeLog:
+  - includeAll:
+      path: db/changelog/changes/
+```
+
+**`src/main/resources/db/changelog/changes/001-create-intent-sessions.sql`**:
 
 ```sql
--- Primary lookup on swipe feed validation
-CREATE INDEX idx_intent_sessions_token_expires ON intent_sessions (token, expires_at);
+--liquibase formatted sql
 
--- Partial unique index: one active session per owner
-CREATE UNIQUE INDEX idx_intent_sessions_owner_active ON intent_sessions (owner_id)
-    WHERE status = 'ACTIVE';
+--changeset tinder4dogs:001-create-intent-sessions
+CREATE TABLE intent_sessions
+(
+    id               BIGSERIAL PRIMARY KEY,
+    session_id       UUID        NOT NULL UNIQUE,
+    token            UUID        NOT NULL UNIQUE,
+    owner_id         BIGINT      NOT NULL,
+    intent           VARCHAR(20) NOT NULL,
+    auto_sex_filter  VARCHAR(10),
+    status           VARCHAR(10) NOT NULL DEFAULT 'ACTIVE',
+    swipe_count      INT         NOT NULL DEFAULT 0,
+    activated        BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at       TIMESTAMPTZ NOT NULL,
+    last_activity_at TIMESTAMPTZ,
+    expires_at       TIMESTAMPTZ NOT NULL
+);
+
+-- Primary lookup on swipe feed validation (NFR-P2: p95 < 50ms)
+CREATE INDEX idx_intent_sessions_token_expires
+    ON intent_sessions (token, expires_at);
 
 -- Cleanup job query
-CREATE INDEX idx_intent_sessions_status_expires ON intent_sessions (status, expires_at);
+CREATE INDEX idx_intent_sessions_status_expires
+    ON intent_sessions (status, expires_at);
+
+--rollback DROP TABLE intent_sessions;
+
+--changeset tinder4dogs:001b-partial-unique-index-owner-active dbms:postgresql
+-- One ACTIVE session per owner enforced at DB level
+CREATE UNIQUE INDEX idx_intent_sessions_owner_active
+    ON intent_sessions (owner_id)
+    WHERE status = 'ACTIVE';
+
+--rollback DROP INDEX IF EXISTS idx_intent_sessions_owner_active;
 ```
+
+> The partial unique index uses a `WHERE` clause which requires a raw SQL changeset in any Liquibase format. The `dbms:postgresql` runAttribute scopes it to PostgreSQL only.
+
+**`application.yaml` changes required by this feature**:
+
+```yaml
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate       # changed from 'update' — Liquibase owns schema
+  liquibase:
+    change-log: classpath:/db/changelog/db.changelog-master.yaml
+    enabled: true
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0         # 100% sampling in dev/test; tune for production
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+    metrics:
+      export:
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318/v1/metrics}
+  metrics:
+    distribution:
+      percentiles-histogram:
+        intent.session.validate: true   # enables p95 histogram for NFR-P2
+```
+
+> `OTEL_EXPORTER_OTLP_ENDPOINT` is an environment variable; the default points to a local OTEL Collector. Override per environment. The `test` profile should set `management.tracing.enabled: false` to avoid coupling tests to a collector.
 
 ### Data Contracts & Integration
 
@@ -440,10 +550,9 @@ Validate at the boundary (controller + service entry points). Fail fast with act
 
 ### Monitoring
 
-- INFO log on each session lifecycle event (analytics events per Req 6).
-- WARN log when an expired token is presented (potential client bug or clock skew).
-- WARN log when cleanup job deletes > 1000 rows in a single run (capacity signal).
-- Session token validation failure rate tracked via log-based alerting.
+- **Traces**: Every service method produces an OTEL span exported to the Collector. Trace IDs are propagated via W3C `traceparent` header on inbound HTTP requests.
+- **Metrics**: `intent.session.active` gauge and `intent.session.validation.errors.total` counter are the primary alerting signals (NFR-O1, NFR-O2).
+- **Logs (complement only)**: WARN on expired token presented; WARN when cleanup deletes > 1000 rows; ERROR on unexpected exceptions. Structured logs include `trace_id` and `span_id` fields (injected by Micrometer Tracing bridge) for correlation with spans.
 
 ---
 
@@ -455,8 +564,10 @@ Validate at the boundary (controller + service entry points). Fail fast with act
 - `IntentSessionService.declareIntent` — BREEDING without `ownerDogSex`: verify `IllegalArgumentException` thrown.
 - `IntentSessionService.getValidSession` — expired token: verify `SessionExpiredException`.
 - `IntentSessionService.getValidSession` — unknown token: verify `SessionNotFoundException`.
-- `IntentSessionService.recordFirstSwipe` — idempotency: second call does not re-emit `session.activated`.
+- `IntentSessionService.recordFirstSwipe` — idempotency: second call does not re-emit `session.activated` span event.
 - `autoSexFilter` derivation: `MALE` dog owner → filter `FEMALE`; `FEMALE` dog owner → filter `MALE`.
+- **OTEL**: use `TestObservationRegistry` (Micrometer test support) to assert that `intent.session.declare` span is created and `session.started` span event is present on `declareIntent`; assert `session.activated` span event on first `recordFirstSwipe`.
+- **Metrics**: use `SimpleMeterRegistry` to assert `intent.session.started.total` counter increments by 1 on `declareIntent`; assert `intent.session.validation.errors.total{error_type=EXPIRED}` increments on expired token.
 
 ### Integration Tests
 
@@ -466,10 +577,11 @@ Validate at the boundary (controller + service entry points). Fail fast with act
 - `GET /api/v1/swipe/feed` with expired token → 403.
 - `DELETE /api/v1/intent-sessions/{sessionId}` → 204; subsequent `getValidSession` throws.
 - `IntentSessionCleanupJob` removes only `EXPIRED`/`CLOSED` rows older than grace period; `ACTIVE` rows untouched.
+- **OTEL**: `@SpringBootTest` with `management.tracing.enabled=false` to disable OTLP export; verify span names and metric counts via `TestObservationRegistry` and `SimpleMeterRegistry` beans.
 
 ### Performance Tests
 
-- `getValidSession` under 1000 concurrent requests: p95 < 50ms (NFR-P2); requires `(token, expires_at)` index.
+- `getValidSession` under 1000 concurrent requests: p95 < 50ms (NFR-P2); requires `(token, expires_at)` index. Verify p95 histogram via `intent.session.validate` Micrometer distribution metric.
 - `declareIntent` throughput: sustain 100 req/s without contention on the partial unique index.
 
 ---
@@ -480,6 +592,32 @@ Validate at the boundary (controller + service entry points). Fail fast with act
 - **Server-side validation** (NFR-S2): token validated on every call to `getValidSession`; no client-side trust.
 - **Intent data privacy**: `intent_sessions` table holds `ownerId` (Long) and intent; no PII beyond the owner identifier. Session rows deleted on close or expiry (Req 4.2) — supports GDPR right-to-erasure chain (NFR-03).
 - **Auth placeholder risk**: `X-Owner-Id` is unauthenticated in MVP. Mitigation: deploy behind VPN/internal network only until the auth feature is implemented.
+
+---
+
+## Migration Strategy
+
+This feature is the first to introduce Liquibase. The migration scope is greenfield (no pre-existing `intent_sessions` rows), so no data migration is needed — only schema creation.
+
+```mermaid
+flowchart LR
+    A[Add liquibase-core to pom.xml] --> B[Set ddl-auto to validate]
+    B --> C[Create db.changelog-master.yaml]
+    C --> D[Create changeset 001-create-intent-sessions]
+    D --> E[Run mvn test — Liquibase applies changelog on test DB]
+    E --> F{Schema valid?}
+    F -- yes --> G[Deploy]
+    F -- no --> H[Fix changeset and re-run]
+```
+
+**Rollback trigger**: If startup validation fails (`ddl-auto: validate` throws `SchemaManagementException`), the rollback is the `rollback` block in changeset `001` (`DROP TABLE intent_sessions`). Run `liquibase rollback --tag=pre-intent` after tagging before deploy.
+
+**Changeset authoring rules** (to be followed by all future features):
+- Use **Liquibase formatted SQL** (`.sql` files with `--liquibase formatted sql` header).
+- One logical change per `--changeset` block; never modify a deployed changeset.
+- Always provide a `--rollback` line immediately after the changeset body.
+- Use `dbms:postgresql` on the `--changeset` line for PostgreSQL-specific DDL (partial indexes, `BIGSERIAL`, etc.).
+- File naming: `NNN-description.sql` under `src/main/resources/db/changelog/changes/`; master includes via `includeAll`.
 
 ---
 
