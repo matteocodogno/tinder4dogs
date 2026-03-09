@@ -10,7 +10,7 @@
   - Add `spring-boot-starter-liquibase` for schema migration management
   - _Requirements: 1.5, 2.1, NFR-S-01_
 
-- [ ] 1.2 Configure Liquibase and update application properties <!-- #36 -->
+- [x] 1.2 Configure Liquibase and update application properties <!-- #36 -->
   - Create `src/main/resources/db/changelog/db.changelog-master.yaml` as the Liquibase master file that includes all migration changesets in order
   - Change `spring.jpa.hibernate.ddl-auto` from `update` to `validate` so Hibernate validates against the Liquibase-managed schema
   - Add `spring.liquibase` configuration pointing to the master changelog

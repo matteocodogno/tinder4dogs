@@ -1,0 +1,3 @@
+databaseChangeLog:
+  # Migration changesets are included here in order.
+  # Tasks 2.1 and 2.2 will add the first entries.

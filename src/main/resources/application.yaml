@@ -2,16 +2,29 @@ spring:
   application:
     name: tinder-for-dogs
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/tinderfordogs}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/tinderfordogs}
     username: ${SPRING_DATASOURCE_USERNAME:postgres}
     password: ${SPRING_DATASOURCE_PASSWORD:postgres}
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate
     show-sql: true
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: false
+          starttls:
+            enable: false
 
 server:
   port: 8081
@@ -35,6 +48,9 @@ openai:
 tinder4dogs:
     support:
         model: support-assistant
+    jwt:
+        secret: ${JWT_SECRET:tinder4dogs-dev-secret-key-must-be-at-least-256-bits-long-for-hs256}
+        access-token-expiry-seconds: ${JWT_ACCESS_TOKEN_EXPIRY_SECONDS:86400}
 
 ---
 spring:
@@ -51,6 +67,14 @@ spring:
     config:
         activate:
             on-profile: test
+    liquibase:
+        enabled: false
+    jpa:
+        hibernate:
+            ddl-auto: create-drop
+    mail:
+        host: localhost
+        port: 1025
 
 langfuse:
     prompt:
