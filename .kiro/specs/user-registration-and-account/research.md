@@ -7,6 +7,7 @@
 - No existing Spring Security or JWT libraries in the project; both must be introduced as new dependencies.
 - JJWT 0.12.x is the best-fit JWT library for this stack (simpler than the Spring OAuth2 Resource Server for a custom email/password setup).
 - Refresh tokens must be stored in PostgreSQL (stateful) to support single-use rotation and synchronous revocation on logout and account deletion.
+- Liquibase with SQL-dialect changesets replaces `ddl-auto: update`; `ddl-auto` changes to `validate`.
 
 ---
 
@@ -60,6 +61,17 @@
   - The custom `JwtAuthenticationFilter` is synchronous; service methods called from controllers remain `suspend` where beneficial.
 - **Implications**: `SecurityConfig` configures a stateless session policy and public/protected endpoint matchers. All domain service methods can remain `suspend`.
 
+### Schema Migration Strategy
+
+- **Context**: The project currently uses `ddl-auto: update`, which is not suitable for production (silent destructive changes, no migration history). Five new tables are required for this feature.
+- **Sources Consulted**: Liquibase Spring Boot Starter docs, Liquibase SQL changelog format reference.
+- **Findings**:
+  - `spring-boot-starter-liquibase` integrates with Spring Boot's auto-configuration and runs changesets at startup before the application context is fully initialised.
+  - SQL-dialect changesets (plain `.sql` files referenced in a YAML master) are preferred over XML/YAML changesets because they are readable, reviewable in PRs, and portable to DBA tooling.
+  - `ddl-auto` must be set to `validate` once Liquibase owns the schema to prevent Hibernate from auto-modifying tables managed by migrations.
+  - Liquibase tracks applied changesets in `databasechangelog` and `databasechangeloglock` tables (created automatically).
+- **Implications**: Add `spring-boot-starter-liquibase` to `pom.xml`. Create `src/main/resources/db/changelog/db.changelog-master.yaml` and one `.sql` file per table in `db/changelog/migrations/`. Set `spring.jpa.hibernate.ddl-auto: validate` in `application.yaml`.
+
 ### BCrypt Cost Factor
 
 - **Context**: NFR-S-01 requires bcrypt cost ≥ 10. Spring Security's default is 10.
@@ -79,6 +91,17 @@
 ---
 
 ## Design Decisions
+
+### Decision: Liquibase with SQL-dialect migrations
+
+- **Context**: `ddl-auto: update` is unsuitable for production; five new tables require versioned, auditable DDL.
+- **Alternatives Considered**:
+  1. Liquibase (`spring-boot-starter-liquibase`) — Spring Boot native, SQL or XML/YAML changesets.
+  2. Flyway (`spring-boot-starter-flyway`) — similar capabilities, simpler API, SQL-first by default.
+- **Selected Approach**: Liquibase with SQL-dialect changesets and YAML master changelog.
+- **Rationale**: Explicit product decision. SQL changesets are human-readable and DBA-friendly. YAML master provides inclusion order and metadata without embedding SQL in YAML.
+- **Trade-offs**: Slightly more setup than Flyway; Liquibase's `databasechangeloglock` can cause startup delays under concurrent restart — mitigated by single-instance MVP deployment.
+- **Follow-up**: Set `spring.jpa.hibernate.ddl-auto: validate` in `application.yaml` as part of the implementation task; ensure test profile uses `validate` or an in-memory Liquibase context.
 
 ### Decision: JJWT 0.12.x over Spring OAuth2 Resource Server
 

@@ -113,7 +113,8 @@ graph TB
 |-------|------------------|-----------------|-------|
 | Backend | Spring Boot 4.0.2 + Spring Security 7 | Filter chain, `BCryptPasswordEncoder`, `UserDetailsService` | New dependency: `spring-boot-starter-security` |
 | JWT | JJWT 0.12.x (`jjwt-api`, `jjwt-impl`, `jjwt-jackson`) | Access token generation and parsing | New dependency; preferred over OAuth2 Resource Server — see `research.md` |
-| Data | Spring Data JPA + PostgreSQL | Five new tables via JPA entities | Existing dependency; DDL via `ddl-auto: update` |
+| Data | Spring Data JPA + PostgreSQL | Five new JPA entities | Existing dependency; schema managed by Liquibase (see below) |
+| Migrations | Liquibase (`spring-boot-starter-liquibase`) + SQL dialect | Versioned schema changes for all five new tables | New dependency; `ddl-auto` set to `validate` once Liquibase owns the schema |
 | Email | Spring Boot Starter Mail + JavaMailSender | Transactional email (verification, password reset) | New dependency: `spring-boot-starter-mail` |
 | Language | Kotlin 2.2, Java 24 | All implementation | Existing; sealed interfaces used for service result types |
 
@@ -665,7 +666,22 @@ erDiagram
 
 ### Physical Data Model
 
-All five tables reside in the default PostgreSQL schema. DDL managed via JPA `ddl-auto: update` (dev) and migration scripts (production).
+All five tables reside in the default PostgreSQL schema. Schema is managed exclusively by **Liquibase** using SQL-dialect changesets (`db/changelog/` under `src/main/resources`). JPA `ddl-auto` is set to `validate` — Hibernate validates entity mappings against the Liquibase-applied schema but never modifies it.
+
+**Changelog structure**:
+```
+src/main/resources/db/
+  changelog/
+    db.changelog-master.yaml        ← master file (includes all changesets)
+    migrations/
+      V001__create_users.sql
+      V002__create_consent_records.sql
+      V003__create_refresh_tokens.sql
+      V004__create_email_verification_tokens.sql
+      V005__create_password_reset_tokens.sql
+```
+
+Each `.sql` file is referenced from `db.changelog-master.yaml` as a Liquibase changeset with `dbms: postgresql` and `runOnChange: false`.
 
 **`users`**
 
