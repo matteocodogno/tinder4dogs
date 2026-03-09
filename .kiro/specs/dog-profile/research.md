@@ -11,6 +11,8 @@
 - **Discovery Scope**: Extension — new vertical-slice module following the established `support/` pattern in an existing Spring Boot monolith
 - **Key Findings**:
   - No existing JPA entities in codebase; Dog Profile introduces the first `@Entity` layer and the first Spring Data repositories
+  - `ddl-auto: update` replaced by Liquibase (`spring-boot-starter-liquibase`) — all schema changes versioned and traceable; `ddl-auto` set to `validate`
+  - OpenTelemetry (`micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp`) mandated for traces, metrics, and correlated logs via OTLP
   - No Spring Security / authentication layer exists yet; owner identity must be passed as a `X-Owner-Id` header in MVP, decoupled from domain logic per NFR-C02/NFR-09
   - PostgreSQL `bytea` chosen for photos — eliminates external object-storage dependency at the cost of increased DB size; acceptable for MVP scale (≤10k DAU)
 
@@ -79,6 +81,32 @@
 ---
 
 ## Design Decisions
+
+### Decision: OpenTelemetry (OTEL) for All Telemetry
+
+- **Context**: The existing codebase uses Langfuse for LLM tracing and `kotlin-logging-jvm` for structured logs, but has no distributed tracing or application-level metrics. The dog-profile feature is the first domain feature requiring observable production behaviour.
+- **Alternatives Considered**:
+  1. Langfuse only — covers LLM calls, not HTTP/DB/service spans; not general-purpose APM
+  2. Micrometer + Prometheus (no OTEL) — metrics only, no traces; limits cross-signal correlation
+  3. OpenTelemetry via OTEL Java agent (zero-code) — auto-instruments everything but harder to customise span attributes
+  4. **OpenTelemetry via `micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp`** — idiomatic Spring Boot 3+/4 approach; Micrometer API in application code, OTEL SDK underneath; backend-agnostic OTLP export
+- **Selected Approach**: `micrometer-tracing-bridge-otel` (Spring Boot Actuator dependency) + `opentelemetry-exporter-otlp`; manual `@WithSpan` / `Tracer` for key service methods; Micrometer `MeterRegistry` for custom counters and histograms
+- **Rationale**: Keeps application code against the Micrometer API (stable, Spring-native); OTEL handles wire protocol; OTLP export works with any backend (Grafana Tempo, Jaeger, Honeycomb). Consistent with the existing project principle of not coupling to a specific vendor SDK.
+- **Trade-offs**: Slightly more setup than pure Prometheus; no vendor lock-in; all three signals (traces, metrics, logs) correlated via `trace_id`
+- **Follow-up**: OTLP collector endpoint configured via `management.otlp.tracing.endpoint` in `application.yaml`; add to `compose.yaml` for local dev (e.g. Grafana LGTM stack or `otel/opentelemetry-collector`)
+
+### Decision: Liquibase for Schema Migrations (replaces `ddl-auto: update`)
+
+- **Context**: `application.yaml` currently uses `spring.jpa.hibernate.ddl-auto: update`, which mutates the schema silently at startup — no audit trail, no rollback path, unsafe in production.
+- **Alternatives Considered**:
+  1. Keep `ddl-auto: update` — zero setup, but untraceable; unsuitable once the app handles real user data
+  2. `ddl-auto: create-drop` — dev-only; destroys data on restart
+  3. Flyway — similar capability, SQL-only changesets
+  4. Liquibase — YAML/XML/SQL changesets, rollback support, Spring Boot auto-configuration, widely adopted with JPA
+- **Selected Approach**: `org.springframework.boot:spring-boot-starter-liquibase` added to `pom.xml`; `spring.jpa.hibernate.ddl-auto` changed to `validate`; changesets written as plain SQL files in `src/main/resources/db/changelog/migrations/` (Liquibase formatted SQL — no XML, YAML, or JSON dialects for migration files)
+- **Rationale**: Every schema change is versioned, peer-reviewed, and reversible. `ddl-auto: validate` keeps Hibernate as a safety net (startup fails if entity ↔ table mismatch) without allowing silent DDL execution.
+- **Trade-offs**: Requires a new changeset file for every schema change; minor discipline overhead — acceptable and standard practice
+- **Follow-up**: `application.yaml` must be updated at implementation time; `test` profile can use `spring.liquibase.contexts: test` or an in-memory H2 for fast unit tests
 
 ### Decision: Separate `repository/` Sub-Package
 

@@ -98,11 +98,18 @@ graph TB
 |-------|------------------|-----------------|
 | Backend | Kotlin 2.2 + Spring Boot 4.0.2 WebMVC | REST controllers, service logic |
 | Persistence | Spring Data JPA + Hibernate 6 | Entity mapping, repositories |
-| Database | PostgreSQL (via `ddl-auto: update`) | `dog_profiles`, `dog_photos`, `breeds` tables |
+| Database | PostgreSQL | `dog_profiles`, `dog_photos`, `breeds` tables |
+| Schema Migrations | `org.springframework.boot:spring-boot-starter-liquibase` | Versioned, traceable DDL migrations in `db/changelog/` |
 | Photo Storage | PostgreSQL `bytea` (mapped as `ByteArray` in Kotlin) | Binary blob per photo record |
 | Logging | kotlin-logging-jvm | Structured log entries per operation |
+| Telemetry | OpenTelemetry (OTEL) via `micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp` | Distributed traces, metrics, and structured logs exported via OTLP |
 
-No new library dependencies required.
+**New dependencies**:
+- `org.springframework.boot:spring-boot-starter-liquibase` — schema migrations
+- `io.micrometer:micrometer-tracing-bridge-otel` — Micrometer → OTEL bridge (included via Spring Boot actuator)
+- `io.opentelemetry:opentelemetry-exporter-otlp` — OTLP exporter to any OTEL collector (Grafana, Jaeger, etc.)
+
+`spring.jpa.hibernate.ddl-auto` must be set to `validate`. (included transitively via `spring-boot-starter-data-jpa` when declared explicitly in `pom.xml`). `spring.jpa.hibernate.ddl-auto` must be set to `validate` (Hibernate validates entity-to-schema alignment but does not mutate the schema).
 
 ---
 
@@ -205,7 +212,7 @@ sequenceDiagram
 | OwnerIdResolver | Presentation | Resolves owner identity from request header | All write/read ops | — | Service |
 | DogProfileService | Service | Core business logic: create, read, update, delete, validate | 1–7 | DogProfileRepository (P0), DogPhotoRepository (P0), BreedRepository (P0), CompletenessCalculator (P0) | Service |
 | CompletenessCalculator | Service | Pure function: computes completeness score 0–100 from profile state | 7 | — | Service |
-| BreedSeeder | Service | Seeds `breeds` table at startup via idempotent upsert | 6.5 | BreedRepository (P0) | Batch |
+| BreedSeeder | Service | Seeds `breeds` table at startup via idempotent upsert; runs after Liquibase migrations complete | 6.5 | BreedRepository (P0) | Batch |
 | DogProfileRepository | Repository | Spring Data JPA for `dog_profiles` | 1–5 | PostgreSQL (P0) | — |
 | DogPhotoRepository | Repository | Spring Data JPA for `dog_photos` | 2 | PostgreSQL (P0) | — |
 | BreedRepository | Repository | Spring Data JPA for `breeds` reference table | 6.5 | PostgreSQL (P0) | — |
@@ -455,6 +462,20 @@ erDiagram
 
 ### Physical Data Model
 
+All DDL is managed by **Liquibase** using plain **SQL changesets** (no XML, YAML, or JSON dialects). Migrations live in `src/main/resources/db/changelog/` using the following structure:
+
+```
+db/changelog/
+  db.changelog-master.xml           ← master include list (XML only for the root orchestrator)
+  migrations/
+    001-create-breeds.sql
+    002-create-dog-profiles.sql
+    003-create-dog-photos.sql
+    004-create-dog-profile-temperament-tags.sql
+```
+
+Each `.sql` file uses Liquibase formatted SQL (`--liquibase formatted sql`, `--changeset author:id`) and includes a `--rollback` block for every `CREATE TABLE`. `spring.jpa.hibernate.ddl-auto=validate` ensures Hibernate confirms entity-to-table alignment at startup without modifying the schema.
+
 **`dog_profiles`**
 
 | Column | Type | Constraints |
@@ -640,9 +661,24 @@ Fail-fast at the controller boundary via `@Valid` Bean Validation; business-rule
 
 ### Monitoring
 
-- All service operations log at `INFO` level: `ownerId`, `profileId`, `operation` (CREATE/UPDATE/DELETE/ADD_PHOTO/REMOVE_PHOTO)
-- All 4xx/5xx responses logged at `WARN`/`ERROR` with `ownerId` and exception class
-- `completenessScore` distribution tracked via log; future metric dashboard consumes these logs (NFR-O02)
+All telemetry is emitted via **OpenTelemetry** using the Micrometer OTEL bridge and exported via OTLP.
+
+**Traces**
+- Each inbound HTTP request automatically produces a root span via Spring Boot auto-instrumentation (`spring-boot-starter-actuator` + OTEL bridge)
+- Service methods for create, update, delete, addPhoto, and deletePhoto are wrapped in child spans using `@WithSpan` (OTEL instrumentation annotation) or manual `Tracer.spanBuilder()`
+- Span attributes: `dog_profile.owner_id`, `dog_profile.profile_id`, `dog_profile.operation`
+
+**Metrics** (via Micrometer `MeterRegistry` → OTEL exporter)
+- `dog_profile.create.total` — counter, tags: `result` (success/error)
+- `dog_profile.update.total` — counter, tags: `result`
+- `dog_profile.delete.total` — counter, tags: `result`
+- `dog_profile.photo.upload.total` — counter, tags: `result`
+- `dog_profile.completeness_score` — histogram, tag: none (distribution of scores across profiles)
+- `dog_profile.photo.size_bytes` — histogram (file sizes at upload time)
+
+**Structured Logs**
+- All service operations emit structured log entries at `INFO` with MDC fields `ownerId`, `profileId`, `operation` — automatically correlated to the active trace via the OTEL log bridge
+- 4xx/5xx responses logged at `WARN`/`ERROR` with `ownerId`, exception class, and OTEL `trace_id` for cross-signal correlation
 
 ---
 

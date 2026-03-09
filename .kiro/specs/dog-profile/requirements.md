@@ -177,8 +177,9 @@ Breed is validated against a system-maintained enumerated breed list. The list i
 
 | NFR ID | Description | Threshold | Priority | Source Req |
 |--------|-------------|-----------|----------|------------|
-| NFR-O01 | Structured logging | All create/update/delete operations shall emit structured log entries with ownerId, profileId, and operation type | P1 | Req 1, 4, 5 |
-| NFR-O02 | Metrics | Profile creation rate, completeness score distribution, and error rate tracked and accessible via monitoring dashboard | P1 | Req 1, 7 |
+| NFR-O01 | OTEL traces | All create/update/delete/photo operations produce OTEL spans with `owner_id`, `profile_id`, and `operation` attributes; exported via OTLP | P1 | Req 1, 4, 5 |
+| NFR-O02 | OTEL metrics | `dog_profile.create/update/delete/photo` counters and `dog_profile.completeness_score` histogram exported via OTLP; dashboard lag ≤ 1 min | P1 | Req 1, 7 |
+| NFR-O03 | Correlated logs | Structured log entries include OTEL `trace_id` for cross-signal correlation in any OTLP-compatible backend | P1 | Req 1, 4, 5 |
 
 ### Usability
 
