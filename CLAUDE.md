@@ -39,9 +39,20 @@
 - Implement tasks not in tasks.md
 - Skip the quality gate on stories (ambiguity_risk=High → not ready)
 - Write acceptance criteria without at least one failure scenario
-
 ---
 
+## GitHub Issues sync rules
+- When tasks.md is finalized: create one GitHub Issue per task
+    - Title: task title from tasks.md
+    - Body: acceptance criteria + link to .kiro/specs/<feature>/tasks.md
+    - Label: "spec-task", milestone = feature name
+    - Save the issue number back into tasks.md as a comment: <!-- gh:#42 -->
+- When starting a task: add label "in-progress" to its issue
+- When a task checkbox is ticked - [x]: close the issue with "Closes #N" in the commit footer
+- Never close an issue without the corresponding checkbox being ticked first
+- Never tick a checkbox without closing the issue (keep them atomic)
+
+---
 
 # AI-DLC and Spec-Driven Development
 
