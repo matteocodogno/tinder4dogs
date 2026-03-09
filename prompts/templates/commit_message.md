@@ -27,26 +27,25 @@ Generate a conventional commit message for these changes:
 
 ### Rules
 - Subject: imperative mood, lowercase, no period, max 50 chars
-- Body: explain WHAT and WHY (not HOW), wrap at 72 chars
+- Body: use bullet points to explain WHAT and WHY (not HOW)
 - Footer: reference issues, breaking changes
 
 ### Examples
 ```
 feat(matching): add compatibility score calculation
 
-Implement algorithm to calculate dog compatibility based on
-breed, age, and preferences. Uses weighted scoring system.
-
-Closes #123
+- Implement algorithm to calculate dog compatibility based on breed, age, and preferences.
+- Uses weighted scoring system.
 ```
 ```
 fix(api): handle null response in dog search
 
-Add null check before accessing search results to prevent
-NullPointerException when no dogs match criteria.
+- Add null check before accessing search results to prevent NullPointerException when no dogs match criteria.
+
+Closes #73
 ```
 
 ## Output
 Generate ONLY the commit message following the format above.
 Do NOT include any explanations or markdown code blocks.
-Add 'Closes #123' only if the issue is in this repo.
+IMPORTANT: Add 'Closes #[issue-number]' only if the issue with number [issue-number] is in this repo, you can infer it from the branch name, e.g., feat/73-hande-null-response. Otherwise, omit it, e.g., main.
