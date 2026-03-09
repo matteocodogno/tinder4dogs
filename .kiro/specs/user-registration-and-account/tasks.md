@@ -3,7 +3,7 @@
 ## Tasks
 
 - [ ] 1. Set up security dependencies and Liquibase infrastructure
-- [ ] 1.1 Add new Maven dependencies to pom.xml <!-- #35 -->
+- [x] 1.1 Add new Maven dependencies to pom.xml <!-- #35 -->
   - Add `spring-boot-starter-security` for Spring Security 7 filter chain and BCrypt support
   - Add `jjwt-api`, `jjwt-impl`, `jjwt-jackson` (JJWT 0.12.x) for JWT token generation and parsing
   - Add `spring-boot-starter-mail` for transactional email dispatch
