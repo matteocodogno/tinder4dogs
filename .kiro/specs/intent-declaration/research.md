@@ -77,12 +77,22 @@
 
 ## Architecture Pattern Evaluation
 
+### Session Storage Options
+
 | Option | Description | Strengths | Risks / Limitations | Notes |
 |--------|-------------|-----------|---------------------|-------|
-| DB-backed session table | `intent_sessions` in PostgreSQL, UUID token | No new infra, consistent with stack, transactional | Requires periodic GC job for expired rows | Selected |
+| DB-backed session table | `intent_sessions` in PostgreSQL, UUID token | No new infra, consistent with stack, transactional | Requires periodic GC job for expired rows | **Selected** — see ADR-001 |
 | Spring Session + Redis | Redis-backed HTTP session | Auto-expiry, fast lookups | Adds Redis as new infra dependency; violates MVP simplicity | Rejected |
 | JWT-encoded intent token | Intent embedded in signed JWT | Stateless, no DB reads on validation | Requires JWT infra (not yet present); revocation impossible without store | Rejected for MVP |
 | In-memory (ConcurrentHashMap) | Store sessions in JVM memory | Trivial implementation | Lost on restart; not cluster-safe | Rejected |
+
+### Module Boundary Options
+
+| Option | Description | Strengths | Risks / Limitations | Notes |
+|--------|-------------|-----------|---------------------|-------|
+| Vertical slice module (`intent/`) | New module inside monolith following existing pattern | Zero new infra; JVM-local calls; aligns with steering | Shared schema; scheduling contention possible | **Selected** |
+| Domain-embedded (inside `DogMatcherService`) | Intent logic merged into existing service | Minimal files; single transaction scope | Violates SRP; guaranteed refactor debt when auth added; breaks `Presentation→Service` rule | Rejected |
+| Separate microservice | Standalone HTTP service for session management | Independent scaling; clear ownership | Network hop per swipe feed request (consumes NFR-P2 budget); adds operational complexity disproportionate to MVP | Rejected |
 
 ---
 

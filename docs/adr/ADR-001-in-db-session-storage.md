@@ -1,0 +1,23 @@
+# ADR-001: PostgreSQL-backed In-DB Session Storage for Intent Sessions
+
+- **Status**: Proposed
+- **Context**: The Intent Declaration feature (F-03) requires ephemeral session storage with a 2-hour idle TTL (NFR-C3). No Redis, no JWT signing infrastructure, and no message broker exist in the current Spring Boot monolith. The MVP constraint is minimal infrastructure addition for 10k DAU scale.
+- **Decision**: Store intent sessions in a dedicated `intent_sessions` PostgreSQL table with UUID opaque tokens. Expiry enforced via `expires_at` column queried on every swipe feed validation. Session GC handled by `IntentSessionCleanupJob` (`@Scheduled`, every 30 minutes).
+  - New table: `intent_sessions` with partial unique index `ON (owner_id) WHERE status = 'ACTIVE'`
+  - Token passed as `X-Intent-Session` HTTP header
+  - Covering index on `(token, expires_at)` for hot-path validation queries
+  - Schema managed exclusively via Liquibase (changeset `001-create-intent-sessions.sql`)
+- **Consequences**:
+  - ✔ Zero new infrastructure — no Redis instance, no JWT signing key rotation, no additional containers beyond what already exists.
+  - ✔ Transactional consistency — session invalidation and creation happen in a single ACID transaction; at most one ACTIVE session per owner enforced at DB level via partial unique index.
+  - ✔ Observable aggregate state — `SELECT COUNT(*) WHERE status = 'ACTIVE'` provides the `intent.session.active` Micrometer gauge without additional state management.
+  - ✘ DB read on every swipe feed validation — adds 1 SELECT per request; mitigated by `(token, expires_at)` covering index but is still a DB round-trip vs. a Redis O(1) memory lookup.
+  - ✘ Manual GC via scheduled job — expired rows must be explicitly deleted by `IntentSessionCleanupJob`; scheduler failure causes unbounded row accumulation (bounded in practice by `2h_TTL × session_rate`, but not automatically capped by the DB engine).
+- **Alternatives**:
+  - **Redis Spring Session**: Auto-expiry via `TTL` command, O(1) lookups — rejected because it adds a Redis instance (new Docker container, ops runbook, failover concern) disproportionate to the current 10k DAU MVP scale.
+  - **JWT-encoded intent token**: Stateless, no DB read on validation — rejected because revocation is impossible without a token denylist (which itself requires a store), and JWT infrastructure (signing key, key rotation, JWKS endpoint) is not yet present in the stack.
+  - **In-memory `ConcurrentHashMap`**: Trivial implementation — rejected because session state is lost on application restart and is not safe across multiple JVM instances in a horizontal scaling scenario.
+- **References**:
+  - `.kiro/specs/intent-declaration/requirements.md` — Req 4 (ephemeral sessions, no permanent profile storage), NFR-C3 (2h TTL, server-side enforcement)
+  - `.kiro/specs/intent-declaration/research.md` — Session Storage Options, Architecture Pattern Evaluation
+  - `.kiro/specs/intent-declaration/design.md` — Physical Data Model, Migration Strategy

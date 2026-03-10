@@ -627,3 +627,165 @@ flowchart LR
 - **Index**: `(token, expires_at)` covering index is the critical optimization — eliminates full table scans on the hot path.
 - **Scale**: At 10k DAU (NFR-SC1), peak concurrent active sessions ≈ 2k–5k rows. PostgreSQL handles this comfortably without partitioning.
 - **Cleanup**: 30-minute cleanup job prevents unbounded table growth; row count stays bounded to `2h_window × peak_session_rate`.
+
+---
+
+## Corner Cases
+
+### Input boundary cases
+
+| Scenario | Expected Behaviour | Requirement |
+|----------|--------------------|-------------|
+| `intent` field missing in `POST /api/v1/intent-sessions` | 400 Bad Request: `"intent is required"` | 1.4 |
+| `intent` value outside `{PLAYMATE, BREEDING}` | 400 Bad Request: `"intent must be PLAYMATE or BREEDING"` | 1.4 |
+| `ownerDogSex` null when `intent = BREEDING` | 422 Unprocessable Entity | 2.3 |
+| `X-Owner-Id` header missing | 400 Bad Request — controller cannot determine owner | 1.2 |
+| `X-Owner-Id` = 0 or negative | `IllegalArgumentException` in service → 400 Bad Request | 1.2 |
+| `X-Intent-Session` header present but empty string | 403 Forbidden — treated as missing token | 5.1 |
+| `sessionId` path variable in `DELETE` not a valid UUID | 404 Not Found — no match in DB | 4.1 |
+| Concurrent `POST /api/v1/intent-sessions` from same owner (race condition) | One succeeds; the other hits partial unique index violation (`23505`) → `DataIntegrityViolationException` → 409 Conflict | 1.2 |
+
+### State & timing edge cases
+
+| Scenario | Expected Behaviour | Requirement |
+|----------|--------------------|-------------|
+| `getValidSession` called at exact millisecond of `expires_at` | Session expired — query uses `expires_at > NOW()` (strict); returns 403 Forbidden | 4.3, 5.4 |
+| `lastActivityAt` update fails after successful read (DB write error) | Session remains valid for its original TTL; idle window not reset; next request after 2h idle returns 403 | 4.3 |
+| `declareIntent` and `IntentSessionCleanupJob` run simultaneously; cleanup deletes the previous ACTIVE session first | Invalidation finds 0 rows to update — proceeds normally; new session created. Idempotent. | 4.2 |
+| Two concurrent `getValidSession` calls both update `lastActivityAt` | Both UPDATE statements execute; last-writer-wins. TTL extension is approximate (acceptable for 2h granularity). | 4.3 |
+| Cleanup job delayed (e.g., JVM GC pause > 30 min) | EXPIRED/CLOSED rows accumulate until job resumes. Correctness unaffected — `expires_at` check is server-side at query time. | 4.2 |
+| DST transition occurs while session is active | No impact — all timestamps stored as `TIMESTAMPTZ` (UTC offset-aware). | 4.3 |
+| DB clock vs. app server clock skew > 1 second | Session may expire slightly earlier or later than the 2h TTL. Acceptable for 2h granularity; document in ops runbook. | 4.3, NFR-C3 |
+
+### Integration failure modes
+
+| Dependency | Failure Scenario | Expected Behaviour | Requirement |
+|------------|------------------|--------------------|-------------|
+| PostgreSQL | Unavailable on `declareIntent` | `DataAccessException` → 503 Service Unavailable | 1.2 |
+| PostgreSQL | Unavailable on `getValidSession` | 503 Service Unavailable; swipe feed blocked until DB recovers | 5.1 |
+| PostgreSQL | Slow query on `getValidSession` (p95 > 50ms) | NFR-P2 breached. Mitigation: `(token, expires_at)` covering index; DB statement timeout < 500ms | NFR-P2 |
+| OTEL Collector | Unavailable | OTLP export fails silently (non-blocking); application continues; analytics events dropped — alert on `otel.export.errors` counter | NFR-O1 |
+| OTEL Collector | Slow (export backpressure) | Micrometer buffers up to `maxBufferSize` records; on overflow, events dropped by design | NFR-O1 |
+| Spring `@Scheduled` | Thread pool exhaustion | Cleanup job delayed or skipped; EXPIRED/CLOSED rows accumulate; correctness maintained; alert via OTEL span `error` flag on job execution | 4.2 |
+
+### Security edge cases
+
+| Scenario | Expected Behaviour | Requirement |
+|----------|--------------------|-------------|
+| `X-Owner-Id` header forged (no JWT in MVP) | Service cannot detect forgery; deploy behind VPN/internal network until auth is added | NFR-S1 |
+| Token brute-force attempt | UUID v4 has 122 bits of entropy (~5.3 × 10³⁶ combinations); computationally infeasible | NFR-S2 |
+| Token presented after session is CLOSED | `findByTokenAndExpiresAtAfter` returns null → `SessionNotFoundException` → 403 Forbidden | 5.1 |
+| Token from owner A presented by owner B | Token is opaque UUID bound to `ownerId` in DB; `getValidSession` returns session context for the token's registered owner; cross-owner use requires token theft | NFR-S1 |
+| SQL injection via `X-Intent-Session` header value | Spring Data JPA uses parameterized queries; injection vector mitigated | NFR-S2 |
+| Session token value in access logs | Ensure access log format excludes `X-Intent-Session` header value to prevent token exposure | NFR-S1 |
+
+### Data edge cases
+
+| Scenario | Expected Behaviour | Requirement |
+|----------|--------------------|-------------|
+| Concurrent `POST` for same owner hits partial unique index | PostgreSQL raises `23505` → `DataIntegrityViolationException` → 409 Conflict; owner retries | 1.2 |
+| `swipeCount` INT overflow (2,147,483,647) | Requires 2.1B swipes in one 2h session — practically impossible; no guard needed | 6.3 |
+| 10× load (100k DAU, ~50k concurrent active sessions) | Table stays small; both indexes (`token+expires_at`, `status+expires_at`) remain efficient; no partitioning needed; cleanup job delete volume scales proportionally | NFR-SC1 |
+| Liquibase changeset applied to production DB with pre-existing data | Greenfield table — no pre-existing `intent_sessions` rows; all changesets are additive (`CREATE TABLE`, `CREATE INDEX`); no data migration risk | — |
+
+---
+
+## Architecture Options Considered
+
+### Option 1: Vertical Slice Module within Monolith (Selected)
+
+New `intent/` module following the `<feature>/presentation/service/model/` pattern inside the existing Spring Boot monolith.
+
+**Advantages**:
+1. Zero infrastructure addition — runs in the existing JVM process using the existing PostgreSQL instance; no new containers or services required.
+2. Transactional consistency — `declareIntent` and swipe feed validation share the same JDBC connection pool and transaction boundary, preventing partial state across service calls.
+3. Sub-millisecond internal call latency — `DogMatcherService` calls `IntentSessionService.getValidSession()` via direct JVM method invocation, keeping additional filter overhead well within NFR-P2 (< 50ms).
+
+**Disadvantages**:
+1. Monolith coupling risk — if boundary discipline is not enforced, `DogMatcherService` ↔ `IntentSessionService` bidirectional dependencies can form; mitigated by the one-way dependency rule in `design.md`.
+2. Scheduling contention — `IntentSessionCleanupJob` shares the Spring `@Scheduled` thread pool with any future scheduled tasks; pool exhaustion delays cleanup (bounded by 30-min cadence).
+3. Shared schema contention — a long-running cleanup DELETE on `intent_sessions` may lock rows and affect connection pool availability for the hot `getValidSession` path under peak load.
+
+### Option 2: Domain-Embedded Session Management (Integrated into DogMatcherService)
+
+Intent session logic added directly to the existing `DogMatcherService` rather than as a separate module.
+
+**Advantages**:
+1. Minimal new files — no new module structure; intent state co-located with filtering logic reduces indirection for the initial implementation.
+2. Single transaction scope — intent creation and feed filtering happen in the same service bean, eliminating any cross-service consistency concern.
+3. Shorter initial call chain — no separate `IntentSessionService.getValidSession()` call required on feed access.
+
+**Disadvantages**:
+1. Violates Single Responsibility — `DogMatcherService` would own both dog-pair compatibility scoring and user session management; any TTL change requires touching the matching service.
+2. Guaranteed refactor debt — when JWT-based auth is added, session management must be extracted anyway, creating at least 2 additional sprint tasks of rework.
+3. Breaks steering boundary rule — `service/` domain core would depend on HTTP header logic (session token parsing), violating the `Presentation → Service` dependency constraint in `steering/structure.md`.
+
+### Option 3: Separate Microservice for Session Management
+
+Intent session lifecycle extracted into a standalone service communicating via HTTP.
+
+**Advantages**:
+1. Independent scaling — session validation (called on every swipe feed request) can be scaled independently of the matching engine above 10k DAU.
+2. Clear ownership boundary — dedicated service owns all session concerns and can evolve independently.
+3. Technology freedom — Redis or a key-value store can be adopted for storage without impacting the monolith's PostgreSQL schema.
+
+**Disadvantages**:
+1. Network hop per swipe feed request — cross-service HTTP call adds minimum 5–20ms at p99, consuming most of the NFR-P2 (< 50ms) budget with no safety margin.
+2. Operational complexity disproportionate to MVP — requires service discovery, container orchestration, and inter-service authentication not yet present in the stack.
+3. Distributed consistency gap — TOCTOU window between session deletion in the session service and token validation cached in the monolith can expose stale-valid tokens for up to one cache TTL.
+
+**Recommendation**: Option 1 (Vertical Slice Module within Monolith) — satisfies NFR-P2 with zero network overhead, requires no new infrastructure, and aligns with the existing steering architecture. Domain boundary enforced via module isolation (`intent/` package), sufficient at the current scale.
+
+---
+
+## Architecture Decision Record
+
+See: [docs/adr/ADR-001-in-db-session-storage.md](../../../../docs/adr/ADR-001-in-db-session-storage.md)
+
+---
+
+## Sequence Diagram
+
+See: [docs/diagrams/intent-declaration-sequence.md](../../../../docs/diagrams/intent-declaration-sequence.md)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Owner
+    participant IntentController
+    participant IntentSessionService
+    participant IntentSessionRepository
+    participant DB as intent_sessions
+    participant SwipeFeedService
+
+    Owner->>IntentController: POST /api/v1/intent-sessions intent, X-Owner-Id
+    IntentController->>IntentSessionService: declareIntent(ownerId, intent, dogSex)
+    IntentSessionService->>IntentSessionRepository: findByOwnerIdAndStatus(ownerId, ACTIVE)
+    IntentSessionRepository->>DB: SELECT WHERE owner_id AND status=ACTIVE
+    DB-->>IntentSessionRepository: previous session or null
+    IntentSessionService->>IntentSessionRepository: update previous session status=CLOSED
+    IntentSessionRepository->>DB: UPDATE status=CLOSED
+    IntentSessionService->>IntentSessionRepository: save new IntentSession(token, intent, expiresAt)
+    IntentSessionRepository->>DB: INSERT intent_sessions row
+    DB-->>IntentSessionRepository: saved entity
+    IntentSessionService-->>IntentController: IntentSessionResponse(token, expiresAt)
+    IntentController-->>Owner: 201 Created token, expiresAt
+
+    Note over IntentSessionService,DB: async boundary - OTEL span event session.started emitted here
+
+    Owner->>SwipeFeedService: GET /api/v1/swipe/feed X-Intent-Session token
+    SwipeFeedService->>IntentSessionService: getValidSession(token)
+    IntentSessionService->>IntentSessionRepository: findByTokenAndExpiresAtAfter(token, now)
+    IntentSessionRepository->>DB: SELECT WHERE token AND expires_at > NOW()
+    alt valid session
+        DB-->>IntentSessionRepository: IntentSession row
+        IntentSessionRepository-->>IntentSessionService: IntentSession
+        IntentSessionService-->>SwipeFeedService: IntentSessionContext(intent, autoSexFilter, availableFilters)
+        SwipeFeedService-->>Owner: 200 OK filtered profiles
+    else missing or expired
+        DB-->>IntentSessionRepository: null
+        IntentSessionRepository-->>IntentSessionService: null
+        IntentSessionService-->>SwipeFeedService: SessionNotFoundException
+        SwipeFeedService-->>Owner: 403 Forbidden redirectTo intent-sessions/new
+    end
+```
