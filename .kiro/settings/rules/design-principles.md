@@ -204,7 +204,7 @@ For the most significant architectural choice, produce an ADR.
 - Alternatives considered: [what else was evaluated]
 - NFRs affected: [list relevant NFR IDs from requirements.md]
 
-→ For the exact ADR output format, follow the template in:
+→ For the exact ADR output format, follow the template in:mk
   .kiro/settings/templates/specs/research.md  (## ADR Format section)
 
 ## Corner Cases
