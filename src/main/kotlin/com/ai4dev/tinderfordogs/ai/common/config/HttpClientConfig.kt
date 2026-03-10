@@ -12,6 +12,20 @@ import org.springframework.web.client.support.RestClientHttpServiceGroupConfigur
 import org.springframework.web.service.registry.HttpServiceGroupConfigurer
 import org.springframework.web.service.registry.ImportHttpServices
 
+/**
+ * Configures HTTP clients for the LiteLLM and OpenAI service groups, injecting base URLs,
+ * API keys, and default headers required by each provider's REST API.
+ *
+ * Registers a [RestClientHttpServiceGroupConfigurer] bean that wires the externally
+ * configured credentials into the underlying [RestClient.Builder] for each named group,
+ * ensuring that every declarative HTTP call made via [LiteLLMService] or [OpenAIService]
+ * carries the correct `Authorization` and `Content-Type` headers without duplicating
+ * that boilerplate in individual service methods.
+ *
+ * The LiteLLM base URL and API key are resolved from `litellm.url` and `litellm.key`
+ * properties respectively, while the OpenAI client always targets the canonical
+ * `https://api.openai.com/v1` endpoint, keyed by `openai.api-key`.
+ */
 @Configuration
 @ImportHttpServices(group = "litellm", types = [LiteLLMService::class])
 @ImportHttpServices(group = "openai", types = [OpenAIService::class])
