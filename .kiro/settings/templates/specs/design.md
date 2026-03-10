@@ -274,3 +274,69 @@ Include a Mermaid flowchart showing migration phases when schema/data movement i
 - Create this section only when keeping the information in the main body would hurt readability (e.g., very long TypeScript definitions, vendor option matrices, exhaustive schema tables). Keep decision-making context in the main sections so the design stays self-contained.
 - Link to the supporting references from the main text instead of inlining large snippets.
 - Background research notes and comparisons continue to live in `research.md`, but their conclusions must be summarized in the main design.
+
+## Architecture Options Considered
+
+### Option 1: [name]
+**Advantages:** (3 items, specific to stated constraints)
+**Disadvantages:** (3 items, measurable or observable)
+
+### Option 2: [name]
+**Advantages:** (3 items, specific to stated constraints)
+**Disadvantages:** (3 items, measurable or observable)
+
+### Option 3: [name]
+**Advantages:** (3 items, specific to stated constraints)
+**Disadvantages:** (3 items, measurable or observable)
+
+**Recommendation:** [chosen option] — [specific reason tied to constraints]
+
+## Architecture Decision Record
+
+See: docs/adr/ADR-001-[decision-slug].md
+
+## Corner Cases
+
+### Input boundary cases
+<!-- empty, null, max-length, concurrent identical requests -->
+
+### State & timing edge cases
+<!-- race conditions, partial failures, clock skew -->
+
+### Integration failure modes
+<!-- per dependency: slow / error / unavailable -->
+
+### Security edge cases
+<!-- auth bypass, injection, token expiry mid-operation -->
+
+### Data edge cases
+<!-- migration risk, 10x load breaking point -->
+
+## Sequence Diagram
+
+<!-- Save to: docs/diagrams/[feature]-sequence.md -->
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client
+    participant API
+    participant Service
+    participant DB
+
+    Client->>API: [primary request]
+    API->>Service: [delegate call]
+    Service->>DB: [data operation]
+    DB-->>Service: [result]
+    Service-->>API: [response]
+    API-->>Client: [final response]
+
+    Note over API,Service: async boundary — queue here if needed
+```
+
+<!-- Rules:
+     - Happy path only — one linear scenario
+     - Mark every async boundary with a Note
+     - Name participants using domain terms from CLAUDE.md
+     - One diagram per feature; complex features may have one per sub-flow
+-->
