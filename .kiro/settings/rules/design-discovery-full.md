@@ -91,3 +91,29 @@ Capture all findings that impact design decisions in `research.md` using the sha
 - Updated domain boundaries that inform Components & Interface Contracts
 - Risks and mitigation strategies
 - Gaps requiring further investigation during implementation
+---
+
+## Corner Cases (Full — all 5 categories)
+Write a ## Corner Cases section in design.md covering:
+
+### Input boundary cases
+- Empty, null, zero, negative, max-length, special characters
+- Concurrent identical requests / malformed payloads
+
+### State & timing edge cases
+- Race conditions, partial failures mid-transaction
+- Clock skew, DST transitions, out-of-order operations
+
+### Integration failure modes
+For every external dependency: slow / errors / unavailable scenarios.
+Include cascade failure chains.
+
+### Security edge cases
+- Auth bypass, privilege escalation, injection vectors
+- Token expiry during a long-running operation
+
+### Data edge cases
+- Existing data violating new constraints (migration risk)
+- What breaks first at 10x current load?
+
+For each case: scenario, expected behaviour, requirement coverage.
