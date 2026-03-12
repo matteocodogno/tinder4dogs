@@ -13,8 +13,8 @@ The codebase follows a **domain + technical sub-module** pattern. The root packa
 
 ### Feature Modules
 **Location**: `src/main/kotlin/com/ai4dev/tinderfordogs/<feature>/`
-**Purpose**: Self-contained vertical slices — each has its own `presentation/`, `service/`, and `model/` sub-packages
-**Example**: `support/presentation/SupportController.kt`, `support/service/SupportAssistantService.kt`, `support/model/CompatibilityRequest.kt`
+**Purpose**: Self-contained vertical slices — each has its own sub-packages as needed. Standard layers: `presentation/`, `service/`, `repository/`, `model/`; add only layers the feature requires.
+**Example**: `support/presentation/SupportController.kt`, `support/service/SupportAssistantService.kt`, `support/model/CompatibilityRequest.kt`, `dogprofile/repository/DogProfileRepository.kt`
 
 ### AI — Common
 **Location**: `src/main/kotlin/com/ai4dev/tinderfordogs/ai/common/`
@@ -45,6 +45,7 @@ The codebase follows a **domain + technical sub-module** pattern. The root packa
 - **Classes**: PascalCase (`DogMatcherService`, `SupportController`, `CompatibilityRequest`)
 - **Controllers**: `<Domain>Controller` — REST entry points, always in a `presentation/` sub-package
 - **Services**: `<Domain>Service` — business logic
+- **Repositories**: `<Domain>Repository` — Spring Data JPA interfaces, always in a `repository/` sub-package
 - **DTOs/Models**: Descriptive noun as Kotlin `data class`
 - **Config**: `<Concern>Config` (e.g., `LangfuseConfig`, `HttpClientConfig`)
 
@@ -61,8 +62,9 @@ No path aliases — standard Maven/Kotlin package structure.
 ## Code Organization Principles
 
 - **Presentation → Service only**: Controllers depend only on services; no direct repository access from controllers
+- **Repository layer**: Spring Data JPA repositories live in a dedicated `repository/` sub-package within the feature module (not inside `service/`)
 - **AI isolation**: Domain code does not depend on `ai/` packages; `ai/` sub-modules share infrastructure via `ai/common/`
-- **Self-contained modules**: Each feature module (`support/`, `ai/finetuning/`) owns its full vertical slice
+- **Self-contained modules**: Each feature module (`support/`, `dogprofile/`, `ai/finetuning/`) owns its full vertical slice
 - **New AI features**: Follow the `ai/<concern>/` sub-tree pattern with the same `model/service/presentation` split
 
 ---
