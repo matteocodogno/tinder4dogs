@@ -1,0 +1,18 @@
+# presenterm configuration
+# Place this file at: ~/.config/presenterm/config.yaml
+# Or use: PRESENTERM_CONFIG_FILE=./presenterm-config.yaml presenterm slides.md
+
+# ── Slide transitions ────────────────────────────────────────────────────────
+# Styles: slide_horizontal | fade | collapse_horizontal
+transition:
+  duration_millis: 450
+  frames: 30
+  animation:
+    style: slide_horizontal
+
+# ── Layout: center content in wide terminals ─────────────────────────────────
+defaults:
+  max_columns: 115
+  max_columns_alignment: center
+  max_rows: 40
+  max_rows_alignment: center
