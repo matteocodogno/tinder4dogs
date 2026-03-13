@@ -104,17 +104,19 @@ who starts fresh every morning.
   ╚═══════════════════════════════════════════════╝
 ```
 
-<!-- notes_start -->
-**LIVE DEMO — ask Claude to regenerate CLAUDE.md from scratch:**
-```
-/init
-```
-Claude reads the pom.xml and source tree → auto-detects Kotlin, Maven,
-Spring Boot 3, JUnit 5 + MockK + Testcontainers.
+<!--
+speaker_note: |
+  **LIVE DEMO — ask Claude to regenerate CLAUDE.md from scratch:**
+  ```
+  /init
+  ```
+  Claude reads the pom.xml and source tree → auto-detects Kotlin, Maven,
+  Spring Boot 3, JUnit 5 + MockK + Testcontainers.
 
-Point out the "Never do" section in the actual CLAUDE.md:
-  ! cat CLAUDE.md
-<!-- notes_end -->
+  Point out the "Never do" section in the actual CLAUDE.md:
+    ! cat CLAUDE.md
+
+-->
 
 <!-- end_slide -->
 
@@ -153,19 +155,21 @@ Point out the "Never do" section in the actual CLAUDE.md:
 /init
 ```
 
-<!-- notes_start -->
-**TALKING POINT**
-The actual CLAUDE.md for this repo contains a hard rule that Liquibase
-migrations under db/changelog/ must never be modified:
-```
-NEVER: modify existing Liquibase migrations
-```
-This project uses Liquibase (not Flyway) — a great reminder that CLAUDE.md
-is a living document that must reflect your actual stack.
+<!--
+speaker_note: |
+  **TALKING POINT**
+  The actual CLAUDE.md for this repo contains a hard rule that Liquibase
+  migrations under db/changelog/ must never be modified:
+  ```
+  NEVER: modify existing Liquibase migrations
+  ```
+  This project uses Liquibase (not Flyway) — a great reminder that CLAUDE.md
+  is a living document that must reflect your actual stack.
 
-Show the file live:
-  ! cat CLAUDE.md
-<!-- notes_end -->
+  Show the file live:
+    ! cat CLAUDE.md
+
+-->
 
 <!-- end_slide -->
 
@@ -198,15 +202,17 @@ Reference files anywhere — in CLAUDE.md or in any prompt:
   ╚══════════════════════════════════════════╝
 ```
 
-<!-- notes_start -->
-**LIVE DEMO — paste this prompt and hit Tab after @:**
-```
-"Review @src/main/kotlin/com/ai4dev/tinderfordogs/dogprofile/presentation/DogProfileController.kt
- and compare it with @src/test/kotlin/com/ai4dev/tinderfordogs/dogprofile/presentation/DogProfileControllerTest.kt"
-```
-Show how Tab autocomplete narrows down the path live.
-For a folder scan: "Find missing tests in @src/main/kotlin/com/ai4dev/tinderfordogs/"
-<!-- notes_end -->
+<!--
+speaker_note: |
+  **LIVE DEMO — paste this prompt and hit Tab after @:**
+  ```
+  "Review @src/main/kotlin/com/ai4dev/tinderfordogs/dogprofile/presentation/DogProfileController.kt
+   and compare it with @src/test/kotlin/com/ai4dev/tinderfordogs/dogprofile/presentation/DogProfileControllerTest.kt"
+  ```
+  Show how Tab autocomplete narrows down the path live.
+  For a folder scan: "Find missing tests in @src/main/kotlin/com/ai4dev/tinderfordogs/"
+
+-->
 
 <!-- end_slide -->
 
@@ -248,7 +254,7 @@ For a folder scan: "Find missing tests in @src/main/kotlin/com/ai4dev/tinderford
   ↑ / ↓        Scroll through prompt history (per-directory)
   Ctrl+R       Reverse fuzzy search through history
   Ctrl+G       Open $EDITOR for long/complex prompts
-  Ctrl+V/Cmd+V Paste images from clipboard (for debugging)
+  Cmd+V        Paste images from clipboard (for debugging)
   Shift+Tab    Cycle modes: Normal → Plan → Auto-approve
 ```
 
@@ -257,12 +263,12 @@ For a folder scan: "Find missing tests in @src/main/kotlin/com/ai4dev/tinderford
 **Text editing in the input line:**
 
 ```
-  Ctrl+K   Delete from cursor to end of line
-  Ctrl+U   Delete entire line
-  Ctrl+Y   Paste last deleted text
-  Alt+Y    Cycle through paste history
-  Alt+B    Move cursor back one word
-  Alt+F    Move cursor forward one word
+  Ctrl+K      Delete from cursor to end of line
+  Ctrl+U      Delete entire line
+  Ctrl+Y      Paste last deleted text
+  Option+Y    Cycle through paste history
+  Option+B    Move cursor back one word
+  Option+F    Move cursor forward one word
 ```
 
 <!-- pause -->
@@ -270,17 +276,17 @@ For a folder scan: "Find missing tests in @src/main/kotlin/com/ai4dev/tinderford
 **Model and reasoning:**
 
 ```
-  Alt+P    Switch model mid-session (Sonnet ↔ Opus)
-  Alt+T    Toggle extended thinking
-  Ctrl+O   Toggle verbose output (full tool call details)
+  Option+P    Switch model mid-session (Sonnet ↔ Opus)
+  Option+T    Toggle extended thinking
+  Ctrl+O      Toggle verbose output (full tool call details)
 ```
 
 <!-- pause -->
 
 ```
-  ⚠  macOS: Option key must be set as Meta.
+  ⚠  Option shortcuts require Meta key in your terminal.
      iTerm2 → Settings → Profiles → Keys
-             → Left Option: "Esc+"
+             → Left Option key: "Esc+"
 ```
 
 <!-- end_slide -->
@@ -472,22 +478,24 @@ Command runs in your shell. Output → Claude's context automatically.
   # Tab autocomplete on file paths
 ```
 
-<!-- notes_start -->
-**LIVE DEMO — bash mode with this repo:**
-```
-! mvn test -q
-! git log --oneline -5
-! curl -s http://localhost:8080/api/v1/dogs
-```
-Each output lands in Claude's context automatically — no copy-paste.
-Follow up: "What do the failing tests tell you?"
+<!--
+speaker_note: |
+  **LIVE DEMO — bash mode with this repo:**
+  ```
+  ! mvn test -q
+  ! git log --oneline -5
+  ! curl -s http://localhost:8080/api/v1/dogs
+  ```
+  Each output lands in Claude's context automatically — no copy-paste.
+  Follow up: "What do the failing tests tell you?"
 
-**LIVE DEMO — @-mention with real files:**
-```
-"Review @src/main/kotlin/com/ai4dev/tinderfordogs/dogprofile/presentation/DogProfileController.kt
- and compare with @src/test/kotlin/com/ai4dev/tinderfordogs/dogprofile/presentation/DogProfileControllerTest.kt"
-```
-<!-- notes_end -->
+  **LIVE DEMO — @-mention with real files:**
+  ```
+  "Review @src/main/kotlin/com/ai4dev/tinderfordogs/dogprofile/presentation/DogProfileController.kt
+   and compare with @src/test/kotlin/com/ai4dev/tinderfordogs/dogprofile/presentation/DogProfileControllerTest.kt"
+  ```
+
+-->
 
 <!-- end_slide -->
 
@@ -563,19 +571,21 @@ navigation, operators, and text objects.
   exit 1  →  non-blocking warning — tool proceeds
 ```
 
-<!-- notes_start -->
-**TALKING POINT**
-CLAUDE.md says: "NEVER modify existing Liquibase migrations."
-But Claude can forget that on a long session. A hook makes it a hard wall:
-```json
-{
-  "matcher": "Write(src/main/resources/db/changelog/**)",
-  "hooks": [{ "type": "command",
-    "command": "echo 'Liquibase migrations are read-only.' && exit 2" }]
-}
-```
-Ask the audience: "What would you protect with a hook in YOUR repo?"
-<!-- notes_end -->
+<!--
+speaker_note: |
+  **TALKING POINT**
+  CLAUDE.md says: "NEVER modify existing Liquibase migrations."
+  But Claude can forget that on a long session. A hook makes it a hard wall:
+  ```json
+  {
+    "matcher": "Write(src/main/resources/db/changelog/**)",
+    "hooks": [{ "type": "command",
+      "command": "echo 'Liquibase migrations are read-only.' && exit 2" }]
+  }
+  ```
+  Ask the audience: "What would you protect with a hook in YOUR repo?"
+
+-->
 
 <!-- end_slide -->
 
@@ -614,18 +624,20 @@ Ask the audience: "What would you protect with a hook in YOUR repo?"
 }
 ```
 
-<!-- notes_start -->
-**LIVE DEMO — show actual settings file:**
-```
-! cat .claude/settings.json
-```
-Then try to trigger the git push block:
-  "Push the current branch to origin"
-Claude gets blocked immediately. The stdout message appears as the reason.
+<!--
+speaker_note: |
+  **LIVE DEMO — show actual settings file:**
+  ```
+  ! cat .claude/settings.json
+  ```
+  Then try to trigger the git push block:
+    "Push the current branch to origin"
+  Claude gets blocked immediately. The stdout message appears as the reason.
 
-**PostToolUse note:** the `Write(*.kt)` hook runs `mvn spotless:apply`
-automatically after every Kotlin file write — zero manual formatting.
-<!-- notes_end -->
+  **PostToolUse note:** the `Write(*.kt)` hook runs `mvn spotless:apply`
+  automatically after every Kotlin file write — zero manual formatting.
+
+-->
 
 <!-- end_slide -->
 
@@ -744,17 +756,19 @@ Analyze in this order:
   /kotlin-critique
 ```
 
-<!-- notes_start -->
-**LIVE DEMO — trigger the skill with a natural language prompt:**
-```
-"Review @src/main/kotlin/com/ai4dev/tinderfordogs/dogprofile/service/DogProfileService.kt"
-```
-Claude auto-matches the description and runs the kotlin-critique checklist:
-P0 null safety → P0 security → P1 N+1 JPA risk → P1 testability → P2 conventions.
+<!--
+speaker_note: |
+  **LIVE DEMO — trigger the skill with a natural language prompt:**
+  ```
+  "Review @src/main/kotlin/com/ai4dev/tinderfordogs/dogprofile/service/DogProfileService.kt"
+  ```
+  Claude auto-matches the description and runs the kotlin-critique checklist:
+  P0 null safety → P0 security → P1 N+1 JPA risk → P1 testability → P2 conventions.
 
-Show the skill file:
-  ! cat .claude/skills/kotlin-critique/SKILL.md
-<!-- notes_end -->
+  Show the skill file:
+    ! cat .claude/skills/kotlin-critique/SKILL.md
+
+-->
 
 <!-- end_slide -->
 
@@ -800,20 +814,22 @@ Scaffold a complete endpoint for the resource: $ARGUMENTS
 Then run `mvn test -q` and report results.
 ```
 
-<!-- notes_start -->
-**LIVE DEMO — scaffold a new endpoint in one command:**
-```
-/dogs:add-endpoint matches
-```
-Claude scaffolds all 5 artifacts for the `matches` resource:
-  MatchController.kt  ·  MatchService.kt  ·  MatchRepository.kt
-  + Liquibase migration  +  unit tests (MockK)  +  @WebMvcTest IT
+<!--
+speaker_note: |
+  **LIVE DEMO — scaffold a new endpoint in one command:**
+  ```
+  /dogs:add-endpoint matches
+  ```
+  Claude scaffolds all 5 artifacts for the `matches` resource:
+    MatchController.kt  ·  MatchService.kt  ·  MatchRepository.kt
+    + Liquibase migration  +  unit tests (MockK)  +  @WebMvcTest IT
 
-Then runs `mvn test -q` and reports results — all from a single command.
+  Then runs `mvn test -q` and reports results — all from a single command.
 
-Show the Kiro commands already in the repo:
-  ! ls .claude/commands/kiro/
-<!-- notes_end -->
+  Show the Kiro commands already in the repo:
+    ! ls .claude/commands/kiro/
+
+-->
 
 <!-- end_slide -->
 
@@ -944,20 +960,22 @@ Show the Kiro commands already in the repo:
     -p "Run mvn spotless:apply on all Kotlin files"
 ```
 
-<!-- notes_start -->
-**LIVE DEMO — run directly from terminal:**
-```bash
-# Find source files with no corresponding test:
-claude -p "Which files under src/main/kotlin/ have no corresponding test in src/test/kotlin/?"
+<!--
+speaker_note: |
+  **LIVE DEMO — run directly from terminal:**
+  ```bash
+  # Find source files with no corresponding test:
+  claude -p "Which files under src/main/kotlin/ have no corresponding test in src/test/kotlin/?"
 
-# Generate a commit message from the last diff:
-git diff HEAD~1 | claude -p "Write a conventional commit message following the rules in CLAUDE.md"
+  # Generate a commit message from the last diff:
+  git diff HEAD~1 | claude -p "Write a conventional commit message following the rules in CLAUDE.md"
 
-# JSON output — all REST endpoints:
-claude --output-format json \
-  -p "List all @RestController classes in this project with their request mappings"
-```
-<!-- notes_end -->
+  # JSON output — all REST endpoints:
+  claude --output-format json \
+    -p "List all @RestController classes in this project with their request mappings"
+  ```
+
+-->
 
 <!-- end_slide -->
 
@@ -993,19 +1011,21 @@ jobs:
           > review.json
 ```
 
-<!-- notes_start -->
-**TALKING POINT**
-`--dangerously-skip-permissions` is safe in CI because:
-  - ephemeral runner has no push access
-  - branch protection rules are enforced by GitHub
-  - worst case: the job fails, nothing is pushed
+<!--
+speaker_note: |
+  **TALKING POINT**
+  `--dangerously-skip-permissions` is safe in CI because:
+    - ephemeral runner has no push access
+    - branch protection rules are enforced by GitHub
+    - worst case: the job fails, nothing is pushed
 
-For this repo the review prompt checks:
-  - Liquibase conventions (no CREATE TABLE without changelog entry)
-  - RFC 7807 ProblemDetail in ALL error responses
-  - Testcontainers integration tests for every new repository
-  - Kotlin null-safety: no !! operators, no raw nullable casts
-<!-- notes_end -->
+  For this repo the review prompt checks:
+    - Liquibase conventions (no CREATE TABLE without changelog entry)
+    - RFC 7807 ProblemDetail in ALL error responses
+    - Testcontainers integration tests for every new repository
+    - Kotlin null-safety: no !! operators, no raw nullable casts
+
+-->
 
 <!-- end_slide -->
 
@@ -1052,22 +1072,24 @@ For this repo the review prompt checks:
   Auto-approve →  everything auto (⚠ sandbox only)
 ```
 
-<!-- notes_start -->
-**LIVE DEMO — plan mode before a multi-file feature:**
-```
-Shift+Tab  →  enter Plan Mode
+<!--
+speaker_note: |
+  **LIVE DEMO — plan mode before a multi-file feature:**
+  ```
+  Shift+Tab  →  enter Plan Mode
 
-"Add a POST /api/v1/matches endpoint.
- Two dog owners match when both swipe right.
- Store match timestamp and compute compatibility score."
-```
-Claude will list every artifact before touching a file:
-  MatchController.kt  ·  MatchService.kt  ·  MatchRepository.kt
-  Match.kt entity  ·  Liquibase migration V002  ·  unit + IT tests
+  "Add a POST /api/v1/matches endpoint.
+   Two dog owners match when both swipe right.
+   Store match timestamp and compute compatibility score."
+  ```
+  Claude will list every artifact before touching a file:
+    MatchController.kt  ·  MatchService.kt  ·  MatchRepository.kt
+    Match.kt entity  ·  Liquibase migration V002  ·  unit + IT tests
 
-Approve → executes. Reject → zero files touched.
-This is the CLAUDE.md rule in action: "show a plan and wait for explicit approval."
-<!-- notes_end -->
+  Approve → executes. Reject → zero files touched.
+  This is the CLAUDE.md rule in action: "show a plan and wait for explicit approval."
+
+-->
 
 <!-- end_slide -->
 
@@ -1113,18 +1135,20 @@ This is the CLAUDE.md rule in action: "show a plan and wait for explicit approva
   ╚══════════════════════════════════════════════════════╝
 ```
 
-<!-- notes_start -->
-**LIVE DEMO — parallel tasks on this repo:**
-```
-"Run these 3 tasks in parallel:
- - Task A: add GET /api/v1/dogs/{id}/compatible endpoint using DogMatcherService
- - Task B: write the missing unit tests in DogMatcherServiceTest.kt
- - Task C: update the OpenAPI spec with the new compatible endpoint"
-```
-Open Ctrl+T to watch 3 agents appear in the task list.
-Each has its own isolated context — no interference between tasks.
-If Task A gets stuck: Ctrl+F × 2 kills all agents instantly.
-<!-- notes_end -->
+<!--
+speaker_note: |
+  **LIVE DEMO — parallel tasks on this repo:**
+  ```
+  "Run these 3 tasks in parallel:
+   - Task A: add GET /api/v1/dogs/{id}/compatible endpoint using DogMatcherService
+   - Task B: write the missing unit tests in DogMatcherServiceTest.kt
+   - Task C: update the OpenAPI spec with the new compatible endpoint"
+  ```
+  Open Ctrl+T to watch 3 agents appear in the task list.
+  Each has its own isolated context — no interference between tasks.
+  If Task A gets stuck: Ctrl+F × 2 kills all agents instantly.
+
+-->
 
 <!-- end_slide -->
 
@@ -1147,8 +1171,8 @@ If Task A gets stuck: Ctrl+F × 2 kills all agents instantly.
   Ctrl+R          Fuzzy search history
   Ctrl+G          Open $EDITOR for prompt
   Shift+Tab       Cycle permission modes
-  Alt+P           Switch model
-  Alt+T           Toggle extended thinking
+  Option+P        Switch model
+  Option+T        Toggle extended thinking
   Ctrl+K          Delete to end of line
   Ctrl+U          Delete entire line
 ```

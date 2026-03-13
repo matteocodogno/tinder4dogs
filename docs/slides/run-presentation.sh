@@ -34,4 +34,4 @@ echo ""
 read -r -p "  Press Enter to start the presentation..." _
 
 # ── Launch with config (transitions + centering) ─────────────────────────────
-PRESENTERM_CONFIG_FILE="$CONFIG" presenterm "$SLIDES"
+PRESENTERM_CONFIG_FILE="$CONFIG" presenterm "$SLIDES" --publish-speaker-notes
