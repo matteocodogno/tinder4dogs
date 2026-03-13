@@ -1,4 +1,4 @@
-package com.ai4dev.tinderfordogs.dogprofile.model
+package com.ai4dev.tinderfordogs.common.model
 
 data class ErrorResponse(
     val code: String,

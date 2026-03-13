@@ -1,8 +1,8 @@
 package com.ai4dev.tinderfordogs.dogprofile.presentation
 
+import com.ai4dev.tinderfordogs.common.model.ErrorResponse
 import com.ai4dev.tinderfordogs.dogprofile.model.CreateDogProfileRequest
 import com.ai4dev.tinderfordogs.dogprofile.model.DogProfileResponse
-import com.ai4dev.tinderfordogs.dogprofile.model.ErrorResponse
 import com.ai4dev.tinderfordogs.dogprofile.service.DogProfileService
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
