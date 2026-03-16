@@ -6,25 +6,26 @@ import com.ai4dev.tinderfordogs.match.model.DogMatchEntry
 import com.ai4dev.tinderfordogs.match.model.DogMatchListResponse
 import com.ai4dev.tinderfordogs.match.model.DogNotFoundException
 import com.ai4dev.tinderfordogs.match.service.DogMatchService
+import com.ninjasquad.springmockk.MockkBean
+import io.mockk.every
 import org.junit.jupiter.api.Test
-import org.mockito.kotlin.any
-import org.mockito.kotlin.eq
-import org.mockito.kotlin.whenever
+import org.junit.jupiter.api.extension.ExtendWith
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.http.MediaType
-import org.springframework.test.context.bean.override.mockito.MockitoBean
+import org.springframework.test.context.junit.jupiter.SpringExtension
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import java.util.UUID
 
+@ExtendWith(SpringExtension::class)
 @WebMvcTest(DogMatchController::class)
 class DogMatchControllerTest {
+    @MockkBean
+    private lateinit var service: DogMatchService
+
     @Autowired
     private lateinit var mockMvc: MockMvc
-
-    @MockitoBean
-    private lateinit var service: DogMatchService
 
     private val dogId = UUID.fromString("00000000-0000-0000-0000-000000000001")
 
@@ -42,7 +43,7 @@ class DogMatchControllerTest {
 
     @Test
     fun `GET matches returns 200 with matches array`() {
-        whenever(service.findMatches(any(), any())).thenReturn(DogMatchListResponse(listOf(sampleEntry)))
+        every { service.findMatches(any(), any()) } returns DogMatchListResponse(listOf(sampleEntry))
 
         mockMvc
             .get("/api/v1/dogs/$dogId/matches") {
@@ -56,7 +57,7 @@ class DogMatchControllerTest {
 
     @Test
     fun `GET matches without limit defaults to 1`() {
-        whenever(service.findMatches(eq(dogId), eq(1))).thenReturn(DogMatchListResponse(listOf(sampleEntry)))
+        every { service.findMatches(eq(dogId), eq(1)) } returns DogMatchListResponse(listOf(sampleEntry))
 
         mockMvc
             .get("/api/v1/dogs/$dogId/matches") {
@@ -101,7 +102,7 @@ class DogMatchControllerTest {
 
     @Test
     fun `GET matches with unknown dogId returns 404 DOG_NOT_FOUND`() {
-        whenever(service.findMatches(any(), any())).thenThrow(DogNotFoundException(dogId))
+        every { service.findMatches(any(), any()) } throws DogNotFoundException(dogId)
 
         mockMvc
             .get("/api/v1/dogs/$dogId/matches") {

@@ -4,25 +4,27 @@ import com.ai4dev.tinderfordogs.dogprofile.model.DogGender
 import com.ai4dev.tinderfordogs.dogprofile.model.DogProfileResponse
 import com.ai4dev.tinderfordogs.dogprofile.model.DogSize
 import com.ai4dev.tinderfordogs.dogprofile.service.DogProfileService
+import com.ninjasquad.springmockk.MockkBean
+import io.mockk.every
 import org.junit.jupiter.api.Test
-import org.mockito.kotlin.any
-import org.mockito.kotlin.whenever
+import org.junit.jupiter.api.extension.ExtendWith
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.http.MediaType
-import org.springframework.test.context.bean.override.mockito.MockitoBean
+import org.springframework.test.context.junit.jupiter.SpringExtension
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.post
 import java.time.Instant
 import java.util.UUID
 
+@ExtendWith(SpringExtension::class)
 @WebMvcTest(DogProfileController::class)
 class DogProfileControllerTest {
+    @MockkBean
+    lateinit var service: DogProfileService
+
     @Autowired
     private lateinit var mockMvc: MockMvc
-
-    @MockitoBean
-    private lateinit var service: DogProfileService
 
     private val sampleId = UUID.fromString("00000000-0000-0000-0000-000000000001")
 
@@ -40,12 +42,15 @@ class DogProfileControllerTest {
 
     @Test
     fun `POST with all required fields returns 201`() {
-        whenever(service.create(any())).thenReturn(sampleResponse)
+        every { service.create(any()) } returns sampleResponse
 
         mockMvc
             .post("/api/v1/dogs") {
                 contentType = MediaType.APPLICATION_JSON
-                content = """{"name":"Rex","breed":"Labrador","size":"LARGE","age":3,"gender":"MALE","bio":"Friendly dog"}"""
+                content =
+                    """
+                    {"name":"Rex","breed":"Labrador","size":"LARGE","age":3,"gender":"MALE","bio":"Friendly dog"}
+                    """.trimIndent()
             }.andExpect {
                 status { isCreated() }
                 jsonPath("$.id") { value(sampleId.toString()) }
@@ -57,7 +62,7 @@ class DogProfileControllerTest {
 
     @Test
     fun `POST without bio returns 201`() {
-        whenever(service.create(any())).thenReturn(sampleResponse.copy(bio = null))
+        every { service.create(any()) } returns sampleResponse.copy(bio = null)
 
         mockMvc
             .post("/api/v1/dogs") {

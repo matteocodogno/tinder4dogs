@@ -1,6 +1,5 @@
 package com.ai4dev.tinderfordogs.match.service
 
-import com.ai4dev.tinderfordogs.dogprofile.model.DogProfile
 import com.ai4dev.tinderfordogs.dogprofile.repository.DogProfileRepository
 import com.ai4dev.tinderfordogs.match.model.DogMatchEntry
 import com.ai4dev.tinderfordogs.match.model.DogMatchListResponse
@@ -36,40 +35,14 @@ class DogMatchService(
                         age = candidate.age,
                         gender = candidate.gender,
                         bio = candidate.bio,
-                        compatibilityScore = calculateCompatibility(source, candidate),
+                        compatibilityScore = CompatibilityScorer.score(source, candidate),
                     )
-                }.sortedWith(compareByDescending<DogMatchEntry> { it.compatibilityScore }.thenBy { it.id.toString() })
-                .take(limit)
+                }.sortedWith(
+                    compareByDescending(DogMatchEntry::compatibilityScore)
+                        .thenBy { it.id.toString() },
+                ).take(limit)
 
         logger.info { "Found ${matches.size} matches for dogId=$dogId (limit=$limit)" }
         return DogMatchListResponse(matches)
-    }
-
-    private fun calculateCompatibility(
-        source: DogProfile,
-        candidate: DogProfile,
-    ): Double {
-        var score = 0.0
-
-        val ageDiff = source.age - candidate.age
-        score +=
-            when {
-                ageDiff < 2 -> 30.0
-                ageDiff < 5 -> 20.0
-                else -> 10.0
-            }
-
-        if (source.breed == candidate.breed) {
-            score += 25.0
-        }
-
-        if (source.gender != candidate.gender) {
-            score += 15.0
-        }
-
-        val commonPreferences = emptyList<String>().intersect(emptyList<String>().toSet()).size
-        score += minOf(commonPreferences * 10, 30)
-
-        return score / 100
     }
 }
