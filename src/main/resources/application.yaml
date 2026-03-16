@@ -2,7 +2,7 @@ spring:
   application:
     name: tinder-for-dogs
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/tinderfordogs}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/tinderfordogs}
     username: ${SPRING_DATASOURCE_USERNAME:postgres}
     password: ${SPRING_DATASOURCE_PASSWORD:postgres}
   jpa:
