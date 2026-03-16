@@ -73,6 +73,20 @@ server.tool(
     },
 );
 
+// Tool 2: Get best match for a dog
+server.tool(
+    {
+        name: 'get_best_match',
+        description: '', // TODO: fill in tool description
+        schema: z.object({
+            // TODO: add tool arguments
+        }),
+    },
+    async ({ /* tool arguments */}) => {
+        // TODO: call API and return appropriate object
+        return array([])
+    },
+);
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 console.log(`Server running on port ${PORT}`);
