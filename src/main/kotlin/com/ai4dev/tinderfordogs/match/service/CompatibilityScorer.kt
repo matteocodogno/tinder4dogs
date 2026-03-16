@@ -14,27 +14,39 @@ object CompatibilityScorer {
     fun score(
         source: DogProfile,
         candidate: DogProfile,
-    ): Double {
-        val ageDiff = source.age - candidate.age
-        var score = 0.0
-        score +=
+    ): Double =
+        listOf(
+            ::calculateAgeScore,
+            ::calculateBreedScore,
+            ::calculateGenderScore,
+            ::calculatePreferencesScore,
+        ).sumOf { it(source, candidate) }
+            .div(PERCENTAGE)
+
+    private fun calculateAgeScore(
+        source: DogProfile,
+        candidate: DogProfile,
+    ): Double =
+        (source.age - candidate.age).let { ageDiff ->
             when {
                 ageDiff < 2 -> MAX_AGE_SCORE
                 ageDiff < 5 -> 20.0
                 else -> MIN_AGE_SCORE
             }
-
-        if (source.breed == candidate.breed) {
-            score += BREED_SCORE
         }
 
-        if (source.gender != candidate.gender) {
-            score += GENDER_SCORE
-        }
+    private fun calculateBreedScore(
+        source: DogProfile,
+        candidate: DogProfile,
+    ): Double = if (source.breed == candidate.breed) BREED_SCORE else 0.0
 
-        val commonPreferences = emptyList<String>().intersect(emptyList<String>().toSet()).size
-        score += minOf(commonPreferences * COMMON_PREFERENCES_MULTIPLIER, MAX_PREFERENCES_SCORE)
+    private fun calculateGenderScore(
+        source: DogProfile,
+        candidate: DogProfile,
+    ): Double = if (source.gender != candidate.gender) GENDER_SCORE else 0.0
 
-        return score / PERCENTAGE
-    }
+    private fun calculatePreferencesScore(
+        source: DogProfile,
+        candidate: DogProfile,
+    ): Double = 0.0
 }
