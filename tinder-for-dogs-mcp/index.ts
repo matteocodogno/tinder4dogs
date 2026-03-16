@@ -1,5 +1,6 @@
-import {array, MCPServer, object} from 'mcp-use/server';
+import {MCPServer, object} from 'mcp-use/server';
 import {z} from 'zod';
+
 
 const API_BASE = process.env.API_BASE_URL ?? 'http://localhost:8080';
 
@@ -77,16 +78,44 @@ server.tool(
 server.tool(
     {
         name: 'get_best_match',
-        description: '', // TODO: fill in tool description
+        description:
+            'Get the best matches for a dog by calling GET /api/v1/dogs/{dogId}/matches. ' +
+            'Requires a valid dogId UUID and accepts an optional limit from 1 to 10. ' +
+            'If limit is omitted, the backend uses the default value 1. ' +
+            'Returns a DogMatchListResponse on success. ' +
+            'Returns HTTP 404 with code DOG_NOT_FOUND if the dog does not exist. ' +
+            'Returns HTTP 400 with code VALIDATION_ERROR if dogId or limit are invalid.',
         schema: z.object({
-            // TODO: add tool arguments
+            dogId: z.string().uuid().describe('UUID of the dog to find matches for'),
+            limit: z
+                .coerce.number()
+                .int()
+                .min(1)
+                .max(10)
+                .optional()
+                .describe('Optional maximum number of matches to return, from 1 to 10. Defaults to 1'),
         }),
     },
-    async ({ /* tool arguments */}) => {
-        // TODO: call API and return appropriate object
-        return array([])
+    async ({dogId, limit}) => {
+        try {
+            const query = typeof limit === 'number' ? `?limit=${limit}` : '';
+            const matches = await apiCall<unknown>('GET', `/api/v1/dogs/${dogId}/matches${query}`);
+
+            return object({
+                success: true,
+                endpoint: 'GET /api/v1/dogs/{dogId}/matches',
+                data: matches,
+            });
+        } catch (err) {
+            return object({
+                success: false,
+                endpoint: 'GET /api/v1/dogs/{dogId}/matches',
+                error: err instanceof Error ? err.message : 'Unknown error',
+            });
+        }
     },
 );
+
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 console.log(`Server running on port ${PORT}`);
