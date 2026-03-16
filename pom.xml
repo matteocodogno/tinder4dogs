@@ -172,7 +172,7 @@
             <plugin>
                 <groupId>org.pitest</groupId>
                 <artifactId>pitest-maven</artifactId>
-                <version>1.17.0</version>
+                <version>1.22.1</version>
                 <dependencies>
                     <dependency>
                         <groupId>org.pitest</groupId>
@@ -182,8 +182,7 @@
                 </dependencies>
                 <configuration>
                     <targetClasses>
-                        <param>com.ai4dev.tinderfordogs.service.*</param>
-                        <param>com.ai4dev.tinderfordogs.domain.*</param>
+                        <param>com.ai4dev.tinderfordogs.*</param>
                     </targetClasses>
                     <targetTests>
                         <param>com.ai4dev.tinderfordogs.*Test</param>
