@@ -30,6 +30,11 @@ class DogProfileService(
         return saved.toResponse()
     }
 
+    @Transactional(readOnly = true)
+    fun findAll(): List<DogProfileResponse> {
+        return repository.findAll().map { it.toResponse() }
+    }
+
     private fun DogProfile.toResponse() =
         DogProfileResponse(
             id = id!!,
