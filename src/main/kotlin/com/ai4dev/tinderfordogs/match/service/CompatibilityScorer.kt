@@ -8,6 +8,8 @@ object CompatibilityScorer {
     private const val MAX_PREFERENCES_SCORE = 30.0
     private const val COMMON_PREFERENCES_MULTIPLIER = 10.0
     private const val PERCENTAGE = 100
+    private const val MAX_AGE_SCORE = 30.0
+    private const val MIN_AGE_SCORE = 10.0
 
     fun score(
         source: DogProfile,
@@ -17,9 +19,9 @@ object CompatibilityScorer {
         var score = 0.0
         score +=
             when {
-                ageDiff < 2 -> 30.0
+                ageDiff < 2 -> MAX_AGE_SCORE
                 ageDiff < 5 -> 20.0
-                else -> 10.0
+                else -> MIN_AGE_SCORE
             }
 
         if (source.breed == candidate.breed) {
