@@ -504,7 +504,9 @@ jobs:
           git add CHANGELOG.md
           git diff --cached --quiet || \
             git commit -m "chore(changelog): update for ${{ steps.tags.outputs.to }} [skip ci]"
-          git push
+          # Push to the PR branch explicitly — Actions checks out a detached HEAD
+          # (the merge commit), so a plain `git push` has no tracking branch.
+          git push origin "HEAD:${{ github.head_ref }}"
 
   # ── 8. AI Cost Report (Langfuse) ─────────────────────────────────────────
   ai-cost-report:
