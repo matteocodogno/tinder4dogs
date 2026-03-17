@@ -219,6 +219,17 @@
                     <timestampedReports>false</timestampedReports>
                 </configuration>
             </plugin>
+            <plugin>
+                <groupId>com.github.gantsign.maven</groupId>
+                <artifactId>ktlint-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <configuration>
+                    <sourceRoots>
+                        <sourceRoot>${project.basedir}/src/main/kotlin</sourceRoot>
+                        <sourceRoot>${project.basedir}/src/test/kotlin</sourceRoot>
+                    </sourceRoots>
+                </configuration>
+            </plugin>
 		</plugins>
 	</build>
 

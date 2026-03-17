@@ -1,0 +1,75 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**/*.kt'
+      - 'pom.xml'
+      - '.github/workflows/lint.yaml'
+  pull_request:
+    paths:
+      - 'src/**/*.kt'
+      - 'pom.xml'
+      - '.github/workflows/lint.yaml'
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  ktlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create stub .envrc for mise
+        run: touch .envrc
+
+      - name: Set up mise (Java, Maven, Kotlin)
+        uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - name: Set up just
+        uses: extractions/setup-just@v2
+
+      - name: Run lint
+        run: just lint 2>&1 | tee /tmp/lint-output.txt
+
+      - name: Post PR comment on failure
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const output = fs.readFileSync('/tmp/lint-output.txt', 'utf8');
+            const violations = output.split('\n')
+              .filter(l => l.includes('.kt:'))
+              .slice(0, 30)
+              .join('\n');
+            const body = `## 🔴 ktlint violations found\n\n\`\`\`\n${violations || output.slice(0, 2000)}\n\`\`\`\n\nRun \`just lint-fix\` locally to auto-fix.\n\n---\n*ktlint check*`;
+            const { data: comments } = await github.rest.issues.listComments(
+              { owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
+            const existing = comments.find(c => c.body.includes('ktlint violations found'));
+            if (existing) {
+              await github.rest.issues.updateComment(
+                { owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment(
+                { owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+            }
+
+      - name: Post PR comment on success
+        if: success() && github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const body = `## ✅ ktlint passed\n\nNo style violations found.\n\n---\n*ktlint check*`;
+            const { data: comments } = await github.rest.issues.listComments(
+              { owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
+            const existing = comments.find(c => c.body.includes('ktlint'));
+            if (existing) {
+              await github.rest.issues.updateComment(
+                { owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+            }

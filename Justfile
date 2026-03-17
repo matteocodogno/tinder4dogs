@@ -322,6 +322,18 @@ clean:
     @rm -rf target/
     @echo "{{ GREEN }}✅ Clean complete{{ NC }}"
 
+# Lint Kotlin sources with ktlint
+lint: check-mise
+    @echo "{{ BLUE }}🔎 Running ktlint check...{{ NC }}"
+    @./mvnw ktlint:check
+    @echo "{{ GREEN }}✅ Lint passed{{ NC }}"
+
+# Auto-fix ktlint violations
+lint-fix: check-mise
+    @echo "{{ YELLOW }}🔧 Running ktlint format...{{ NC }}"
+    @./mvnw ktlint:format
+    @echo "{{ GREEN }}✅ Lint fixes applied{{ NC }}"
+
 # Package JAR file
 package: check-mise
     @echo "{{ BLUE }}📦 Packaging application...{{ NC }}"
