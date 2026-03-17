@@ -565,21 +565,21 @@ commit:
     #!/usr/bin/env bash
     echo "💬 Generating commit message..."
 
-    MSG=$(just commit-msg) || MSG=""
+    CHANGELOG=$(just commit-msg) || CHANGELOG=""
 
-    if [ -z "$MSG" ]; then
+    if [ -z "$CHANGELOG" ]; then
       echo "❌ Failed to generate commit message"
       exit 1
     fi
 
     echo "📝 Commit message:"
-    echo "$MSG"
+    echo "$CHANGELOG"
     echo ""
     echo "Proceed? (y/N)"
     read -r confirm
 
     if [ "$confirm" = "y" ]; then
-      git commit -m "$MSG"
+      git commit -m "$CHANGELOG"
       echo "✅ Committed"
     else
       echo "❌ Aborted"
@@ -595,28 +595,30 @@ changelog hash="":
       { [ -n "{{hash}}" ] && echo "{{hash}}"; } || \
       git rev-list --max-parents=0 HEAD)}
     TO_TAG=${2:-HEAD}
-    COMMITS=$(git log "${FROM_TAG}..${TO_TAG}" --pretty=format:"%s%n%b" --no-merges)
+    COMMITS=$(git log "${FROM_TAG}..${TO_TAG}" --pretty=format:"%s" --no-merges)
 
     echo "🔍 FROM: $FROM_TAG → TO: $TO_TAG"
     echo "📦 Commits found: $(echo "$COMMITS" | grep -c . || echo 0)"
 
     PAYLOAD="$(jq -n --arg c "$COMMITS" --arg f "$FROM_TAG" --arg t "$TO_TAG" '{
           model: "ci-summarizer",
-          max_tokens: 1000
+          max_tokens: 1000,
           messages: [
             {role: "system", content: "Write a CHANGELOG.md using Keep a Changelog format. Group commits by type (Added, Changed, Fixed, etc.). Bold any BREAKING CHANGES."},
             {role: "user", content: "Release \($t) from \($f):\n\($c)"}
           ],
           metadata: {
-          tags: ["ci, "changelog"]
-          
+            tags: ["ci", "changelog"],
+            from_tag: $f,
+            to_tag: $t,
+            project: "{{PROJECT_NAME}}"
           }
         }')"
 
     echo "📤 Sending request to {{LITELLM_URL}}..."
     echo "📤 with payload: $PAYLOAD "
 
-    RESPONSE="$(curl -s -w "\n%{http_code}" --max-time 120 "{{LITELLM_URL}}" \
+    RESPONSE="$(curl -s -w "\n%{http_code}" --max-time 240 "{{LITELLM_URL}}" \
           -H "Content-Type: application/json" \
           -H "Authorization: Bearer {{LITELLM_KEY}}" \
           -d "$PAYLOAD")"
@@ -631,26 +633,57 @@ changelog hash="":
       exit 1
     fi
 
-    MSG="$(echo "$BODY" | jq -r '.choices[0].message.content')"
+    CHANGELOG="$(echo "$BODY" | jq -r '.choices[0].message.content')"
 
-    if [ -z "$MSG" ] || [ "$MSG" = "null" ]; then
+    if [ -z "$CHANGELOG" ] || [ "$CHANGELOG" = "null" ]; then
       echo "❌ Failed to extract message from response:"
       echo "$BODY"
       exit 1
     fi
 
-    echo "📝 Changelog:"
-    echo "$MSG"
-    echo ""
-    echo "Proceed? (y/N)"
-    read -r confirm
+    # Create or update CHANGELOG.md
+    TEMP_FILE=$(mktemp)
 
-    if [ "$confirm" = "y" ]; then
-      echo "$MSG" >> CHANGELOG.md
-      echo "✅ Written to CHANGELOG.md"
+    if [ -f "CHANGELOG.md" ]; then
+        # Append to existing file (insert after header)
+        if grep -q "^# Changelog" CHANGELOG.md; then
+            # Insert after the "# Changelog" line
+            awk -v new="$CHANGELOG" '
+                /^# Changelog/ {
+                    print
+                    if (getline > 0) print
+                    print ""
+                    print new
+                    print ""
+                    next
+                }
+                {print}
+            ' CHANGELOG.md > "$TEMP_FILE"
+        else
+            # No header found, prepend
+            echo "$CHANGELOG" > "$TEMP_FILE"
+            echo "" >> "$TEMP_FILE"
+            cat CHANGELOG.md >> "$TEMP_FILE"
+        fi
     else
-      echo "❌ Aborted"
+        # Create new file
+        echo "# Changelog" > "$TEMP_FILE"
+        echo "" >> "$TEMP_FILE"
+        echo "All notable changes to this project will be documented in this file." >> "$TEMP_FILE"
+        echo "" >> "$TEMP_FILE"
+        echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)," >> "$TEMP_FILE"
+        echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)." >> "$TEMP_FILE"
+        echo "" >> "$TEMP_FILE"
+        echo "$CHANGELOG" >> "$TEMP_FILE"
     fi
+
+    mv "$TEMP_FILE" CHANGELOG.md
+
+    echo -e "{{ GREEN }}✅ Changelog saved to CHANGELOG.md{{ NC }}"
+
+
+
+
 
 # ============================================
 # ROLE: REVIEWER (Code Review)
