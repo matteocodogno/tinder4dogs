@@ -5,8 +5,10 @@ runs:
   steps:
     - name: Install just
       uses: extractions/setup-just@v2
-      shell: bash
 
     - name: Install mise
       uses: jdx/mise-action@v2
+
+    - name: Setup mise
+      run: eval "$(mise activate bash)"
       shell: bash

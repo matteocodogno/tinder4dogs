@@ -22,7 +22,8 @@ jobs:
         uses: ./.github/actions/setup-dev-tools
 
       - name: Build project
-        run: just build
+        run: just build-fast
+        shell: bash
 
   lint:
     name: Kotlin Code Style

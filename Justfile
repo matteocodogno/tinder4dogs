@@ -7,7 +7,7 @@
 
 # LiteLLM configuration
 LITELLM_URL := "http://localhost:4000/chat/completions"
-LITELLM_KEY := env_var('LITELLM_MASTER_KEY')
+LITELLM_KEY := env_var_or_default('LITELLM_MASTER_KEY', 'whysoserious')
 
 # Project configuration
 PROJECT_NAME := "tinder-for-dogs"
@@ -183,6 +183,7 @@ check-mise:
     fi
 
     echo -e "{{ GREEN }}✅ mise is active{{ NC }}"
+    echo -e "$(java --version)"
 
 ## Check environment variables
 check-env:
@@ -1147,6 +1148,79 @@ lint-format: check-mise
 # ============================================
 # Course excercise
 # ============================================
+
+# ============================================
+# Security
+# ============================================
+
+# Run Trivy security scan with AI-powered triage
+trivy-scan:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo -e "{{ BLUE }}🔒 Running Trivy security scan...{{ NC }}"
+
+    # Run Trivy scan
+    docker run --rm -v "$(pwd):/scan" aquasec/trivy:latest fs \
+      --format json \
+      --output /scan/trivy-report.json \
+      --severity CRITICAL,HIGH \
+      --ignore-unfixed \
+      /scan
+
+    # Print all findings
+    echo -e "{{ BLUE }}=== Trivy Security Scan Results ==={{ NC }}"
+    if [ -f trivy-report.json ]; then
+        jq -r '.Results[]? | select(.Vulnerabilities) | "
+        \n📦 Target: \(.Target)
+        \nVulnerabilities found: \(.Vulnerabilities | length)
+        \n" + (.Vulnerabilities[] | "
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        🔴 [\(.Severity)] \(.VulnerabilityID)
+        📌 Package: \(.PkgName) (\(.InstalledVersion))
+        ✅ Fixed in: \(.FixedVersion // "Not available")
+        📝 \(.Title)
+        🔗 \(.PrimaryURL // "")
+        ")' trivy-report.json || echo "No vulnerabilities found"
+    else
+        echo "No trivy-report.json file found"
+    fi
+
+    # AI security triage
+    echo -e "{{ BLUE }}🤖 Running AI security triage...{{ NC }}"
+
+    CRITICAL=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-report.json)
+
+    if [ "$CRITICAL" -eq "0" ]; then
+        echo -e "{{ GREEN }}✅ No critical vulnerabilities found{{ NC }}"
+        echo "VERDICT: ALLOW"
+        exit 0
+    fi
+
+    FINDINGS=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL") | {id:.VulnerabilityID,pkg:.PkgName,installed:.InstalledVersion,fixed:.FixedVersion,title:.Title}]' trivy-report.json)
+
+    # Call Claude API for triage
+    TRIAGE=$(curl -s https://api.anthropic.com/v1/messages \
+      -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+      -H "anthropic-version: 2023-06-01" \
+      -H "content-type: application/json" \
+      -d "$(jq -n --argjson f "$FINDINGS" '{
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 800,
+        system: "Triage CVEs for a Kotlin/Spring Boot Maven API. For each CRITICAL CVE state: exploitability in this context, recommended action, urgency. End with VERDICT: BLOCK or VERDICT: ALLOW.",
+        messages: [{role: "user", content: ("Triage:\n" + ($f | tostring))}]
+      }')" | jq -r '.content[0].text')
+
+    echo "$TRIAGE"
+
+    # Check verdict and exit accordingly
+    if echo "$TRIAGE" | grep -q "VERDICT: BLOCK"; then
+        echo -e "{{ RED }}🚨 Security scan BLOCKED{{ NC }}"
+        exit 1
+    else
+        echo -e "{{ GREEN }}✅ Security scan ALLOWED{{ NC }}"
+        exit 0
+    fi
 
 # ============================================
 # GitHub PR Summary (CI Integration)
