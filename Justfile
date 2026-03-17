@@ -143,6 +143,7 @@ check-tools:
     check_tool just
     check_tool direnv
     check_tool gitleaks
+    check_tool trivy
 
     # Optional but recommended
     if command -v infisical &> /dev/null || command -v op &> /dev/null; then
@@ -156,7 +157,7 @@ check-tools:
     if [ $MISSING -eq 1 ]; then
         echo -e "{{ RED }}❌ Some tools are missing. Please install them:{{ NC }}"
         echo ""
-        echo "  brew install mise docker git just direnv gitleaks"
+        echo "  brew install mise docker git just direnv gitleaks trivy"
         echo "  brew install infisical/get-cli/infisical  # or 1password-cli"
         exit 1
     fi
@@ -389,6 +390,81 @@ _call_ai role prompt_file *metadata:
 
     # Extract and return content
     echo "$RESPONSE" | jq -r '.choices[0].message.content'
+
+# ============================================
+# ROLE: SECURITY
+# ============================================
+
+# Run Trivy filesystem scan → trivy-report.json
+security-scan:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🔍 Running Trivy security scan...{{ NC }}"
+    trivy fs \
+      --format json \
+      --output trivy-report.json \
+      --severity CRITICAL,HIGH \
+      --ignore-unfixed \
+      .
+    echo -e "{{ GREEN }}✅ Scan complete → trivy-report.json{{ NC }}"
+
+# Print human-readable findings from trivy-report.json
+security-report:
+    #!/usr/bin/env bash
+    if [ ! -f trivy-report.json ]; then
+        echo -e "{{ RED }}❌ trivy-report.json not found. Run: just security-scan{{ NC }}"
+        exit 1
+    fi
+    echo "=== Trivy Security Scan Results ==="
+    jq -r '.Results[]? | select(.Vulnerabilities) | "\n📦 Target: \(.Target)\nVulnerabilities found: \(.Vulnerabilities | length)\n" + (.Vulnerabilities[] | "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🔴 [\(.Severity)] \(.VulnerabilityID)\n📌 Package: \(.PkgName) (\(.InstalledVersion))\n✅ Fixed in: \(.FixedVersion // "Not available")\n📝 \(.Title)\n🔗 \(.PrimaryURL // "")\n")' trivy-report.json \
+      || echo "No vulnerabilities found"
+
+# AI triage of CRITICAL CVEs → trivy-triage.txt (exits 1 on VERDICT: BLOCK)
+security-triage:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -f trivy-report.json ]; then
+        echo -e "{{ RED }}❌ trivy-report.json not found. Run: just security-scan{{ NC }}"
+        exit 1
+    fi
+    if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+        echo -e "{{ RED }}❌ ANTHROPIC_API_KEY not set{{ NC }}"
+        exit 1
+    fi
+
+    CRITICAL=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-report.json)
+    if [ "$CRITICAL" -eq "0" ]; then
+        echo -e "{{ GREEN }}✅ No critical vulnerabilities found{{ NC }}"
+        echo "✅ No critical vulnerabilities found" > trivy-triage.txt
+        exit 0
+    fi
+
+    echo -e "{{ YELLOW }}⚠️  Found $CRITICAL CRITICAL CVEs — running AI triage...{{ NC }}"
+
+    FINDINGS=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL") | {id:.VulnerabilityID,pkg:.PkgName,installed:.InstalledVersion,fixed:.FixedVersion,title:.Title}]' trivy-report.json)
+
+    TRIAGE=$(curl -s https://api.anthropic.com/v1/messages \
+      -H "x-api-key: $ANTHROPIC_API_KEY" \
+      -H "anthropic-version: 2023-06-01" \
+      -H "content-type: application/json" \
+      -d "$(jq -n --argjson f "$FINDINGS" '{
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 800,
+        system: "Triage CVEs for a Kotlin/Spring Boot Maven API. For each CRITICAL CVE state: exploitability in this context, recommended action, urgency. End with VERDICT: BLOCK or VERDICT: ALLOW.",
+        messages: [{role: "user", content: ("Triage:\n" + ($f | tostring))}]
+      }')" | jq -r '.content[0].text')
+
+    echo "$TRIAGE"
+    echo "$TRIAGE" > trivy-triage.txt
+
+    if echo "$TRIAGE" | grep -q "VERDICT: BLOCK"; then
+        echo -e "{{ RED }}🚨 VERDICT: BLOCK — critical vulnerabilities require immediate action{{ NC }}"
+        exit 1
+    fi
+    echo -e "{{ GREEN }}✅ VERDICT: ALLOW{{ NC }}"
+
+# Full security check: scan → report → AI triage
+security: security-scan security-report security-triage
 
 # ============================================
 # ROLE: CHANGELOG (Release Notes)
