@@ -130,3 +130,33 @@ jobs:
 
       - name: Run tests
         run: just test
+
+  changelog:
+    needs: test
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up just
+        uses: extractions/setup-just@v2
+
+      - name: Generate PR changelog
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: just changelog-pr ${{ github.base_ref }}
+
+      - name: Commit changelog
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git diff --staged --quiet && echo "No changelog changes" || \
+            git commit -m "docs(changelog): update for PR #${{ github.event.pull_request.number }} [skip ci]" && \
+            git push
