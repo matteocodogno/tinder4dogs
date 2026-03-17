@@ -29,7 +29,6 @@ import java.util.UUID
  *     assertEquals(0.50, score)  // ageDiff<2 (0.30) + 2 common prefs (0.20)
  */
 class CompatibilityScorerTest {
-
     private fun profile(
         breed: String = "Labrador",
         age: Int = 3,
@@ -131,7 +130,10 @@ class CompatibilityScorerTest {
         "5,  0.10",
         "10, 0.10",
     )
-    fun `age tier boundaries produce correct normalised score`(ageDiff: Int, expected: Double) {
+    fun `age tier boundaries produce correct normalised score`(
+        ageDiff: Int,
+        expected: Double,
+    ) {
         val source = profile(breed = "Poodle", age = 10, gender = DogGender.MALE)
         val candidate = profile(breed = "Labrador", age = 10 - ageDiff, gender = DogGender.MALE)
         assertEquals(expected, CompatibilityScorer.score(source, candidate), 0.001)
