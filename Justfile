@@ -379,6 +379,149 @@ _call_ai role prompt_file *metadata:
     echo "$RESPONSE" | jq -r '.choices[0].message.content'
 
 # ============================================
+# ROLE: CHANGELOG (Release Notes)
+# ============================================
+# Internal: Generate changelog content only (no status messages)
+_changelog-generate from_tag to_tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    FROM_TAG="{{from_tag}}"
+    TO_TAG="{{to_tag}}"
+
+    # Verify refs exist
+    if ! git rev-parse --verify "$FROM_TAG" >/dev/null 2>&1; then
+        echo -e "{{ RED }}❌ Invalid ref: $FROM_TAG{{ NC }}" >&2
+        exit 1
+    fi
+
+    if ! git rev-parse --verify "$TO_TAG" >/dev/null 2>&1; then
+        echo -e "{{ RED }}❌ Invalid ref: $TO_TAG{{ NC }}" >&2
+        exit 1
+    fi
+
+    # Get commits between refs (works for tags, branches, commits)
+    COMMITS=$(git log "${FROM_TAG}..${TO_TAG}" --pretty=format:"%s%n%b" --no-merges -- 2>&1)
+
+    if [ -z "$COMMITS" ]; then
+        echo -e "{{ YELLOW }}⚠️  No commits found between $FROM_TAG and $TO_TAG{{ NC }}" >&2
+        exit 0
+    fi
+
+    # Build JSON payload using jq
+    JSON_PAYLOAD=$(jq -n \
+      --arg commits "$COMMITS" \
+      --arg from "$FROM_TAG" \
+      --arg to "$TO_TAG" \
+      '{
+        model: "ci-summarizer",
+        max_tokens: 1000,
+        messages: [
+          {
+            role: "system",
+            content: "Write CHANGELOG.md sections from conventional commits. Group by type (feat, fix, chore, refactor, test, docs, ci, perf). Flag BREAKING CHANGE footers in bold. Use Keep a Changelog format (https://keepachangelog.com). Be concise and user-focused."
+          },
+          {
+            role: "user",
+            content: ("Release " + $to + " from " + $from + ":\n\n" + $commits)
+          }
+        ],
+        metadata: {
+          tags: ["ci", "changelog"],
+          from_tag: $from,
+          to_tag: $to,
+          project: "{{PROJECT_NAME}}"
+        }
+      }')
+
+    # Call LiteLLM
+    RESPONSE=$(curl -s -X POST {{LITELLM_URL}} \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer {{LITELLM_KEY}}" \
+      -d "$JSON_PAYLOAD")
+
+    # Check for errors
+    if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+        echo -e "{{ RED }}❌ API Error:{{ NC }}" >&2
+        echo "$RESPONSE" | jq '.error' >&2
+        exit 1
+    fi
+
+    # Extract and output changelog content only
+    echo "$RESPONSE" | jq -r '.choices[0].message.content'
+
+# Generate and append changelog to CHANGELOG.md file
+changelog-save from_tag="" to_tag="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Determine FROM and TO tags
+    FROM_TAG="{{from_tag}}"
+    TO_TAG="{{to_tag}}"
+
+    if [ -z "$FROM_TAG" ]; then
+        FROM_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+        if [ -z "$FROM_TAG" ]; then
+            echo -e "{{ RED }}❌ No previous tag found. Specify manually: just changelog-save <from_tag> <to_tag>{{ NC }}"
+            exit 1
+        fi
+    fi
+
+    if [ -z "$TO_TAG" ]; then
+        TO_TAG="HEAD"
+    fi
+
+    echo -e "{{ BLUE }}📝 Generating changelog from $FROM_TAG to $TO_TAG...{{ NC }}"
+
+    # Generate changelog (only content, no status messages)
+    CHANGELOG=$(just _changelog-generate "$FROM_TAG" "$TO_TAG")
+
+    if [ -z "$CHANGELOG" ]; then
+        echo -e "{{ RED }}❌ Failed to generate changelog{{ NC }}"
+        exit 1
+    fi
+
+    # Create or update CHANGELOG.md
+    TEMP_FILE=$(mktemp)
+
+    if [ -f "CHANGELOG.md" ]; then
+        # Append to existing file (insert after header)
+        if grep -q "^# Changelog" CHANGELOG.md; then
+            # Insert after the "# Changelog" line
+            awk -v new="$CHANGELOG" '
+                /^# Changelog/ {
+                    print
+                    if (getline > 0) print
+                    print ""
+                    print new
+                    print ""
+                    next
+                }
+                {print}
+            ' CHANGELOG.md > "$TEMP_FILE"
+        else
+            # No header found, prepend
+            echo "$CHANGELOG" > "$TEMP_FILE"
+            echo "" >> "$TEMP_FILE"
+            cat CHANGELOG.md >> "$TEMP_FILE"
+        fi
+    else
+        # Create new file
+        echo "# Changelog" > "$TEMP_FILE"
+        echo "" >> "$TEMP_FILE"
+        echo "All notable changes to this project will be documented in this file." >> "$TEMP_FILE"
+        echo "" >> "$TEMP_FILE"
+        echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)," >> "$TEMP_FILE"
+        echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)." >> "$TEMP_FILE"
+        echo "" >> "$TEMP_FILE"
+        echo "$CHANGELOG" >> "$TEMP_FILE"
+    fi
+
+    mv "$TEMP_FILE" CHANGELOG.md
+
+    echo -e "{{ GREEN }}✅ Changelog saved to CHANGELOG.md{{ NC }}"
+
+# ============================================
 # ROLE: COMMITTER (Commit Messages)
 # ============================================
 
@@ -798,63 +941,7 @@ gen-tests file:
 #
 #    echo ""
 #    echo -e "{{ GREEN }}✅ All tests generated{{ NC }}"
-#
-## ============================================
-## ROLE: COMMITTER (GPT-4-mini - Commit Messages)
-## ============================================
-#
-## Generate conventional commit message
-#commit-msg:
-#    #!/usr/bin/env bash
-#    DIFF=$(git diff --staged)
-#
-#    if [ -z "$DIFF" ]; then
-#        echo -e "{{ RED }}❌ No staged changes{{ NC }}" >&2
-#        exit 1
-#    fi
-#
-#    PROMPT="Generate a conventional commit message for these changes:
-#
-#\`\`\`diff
-#$DIFF
-#\`\`\`
-#
-#Format: <type>(<scope>): <subject>
-#
-#Types: feat, fix, docs, style, refactor, test, chore
-#Keep subject under 72 characters
-#Add body only if changes are complex
-#
-#Output ONLY the commit message, no explanation."
-#
-#    just _call_ai committer "$PROMPT" task=commit_message
-#
-## Commit with AI-generated message
-#commit:
-#    #!/usr/bin/env bash
-#    echo -e "{{ BLUE }}💬 Generating commit message...{{ NC }}"
-#
-#    MSG=$(just commit-msg 2>&1)
-#
-#    if [ $? -ne 0 ]; then
-#        echo "$MSG"
-#        exit 1
-#    fi
-#
-#    echo ""
-#    echo -e "{{ YELLOW }}Commit message:{{ NC }}"
-#    echo "$MSG"
-#    echo ""
-#    echo -e "{{ BLUE }}Proceed with commit? (y/N){{ NC }}"
-#    read -r confirm
-#
-#    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
-#        git commit -m "$MSG"
-#        echo -e "{{ GREEN }}✅ Committed{{ NC }}"
-#    else
-#        echo -e "{{ YELLOW }}Aborted{{ NC }}"
-#    fi
-#
+
 ## ============================================
 ## ROLE: REFACTORER (Claude - Refactoring)
 ## ============================================
