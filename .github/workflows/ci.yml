@@ -329,10 +329,15 @@ jobs:
 
           if [ -z "$COMMITS" ]; then
             echo "No commits to summarise between $FROM and $TO"
+            echo "generated=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          CHANGELOG=$(curl -s https://api.anthropic.com/v1/messages \
+          # Write to a temp file — avoids markdown content being corrupted
+          # when passed through $GITHUB_OUTPUT and re-interpolated as a shell expression.
+          CHANGELOG_FILE="/tmp/new-changelog.md"
+
+          curl -s https://api.anthropic.com/v1/messages \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -H "content-type: application/json" \
@@ -346,27 +351,46 @@ jobs:
                   system: "Write CHANGELOG.md sections from conventional commits. Group by type (Added/Changed/Fixed/Removed/Security/Performance). Bold BREAKING CHANGE footers. Use Keep a Changelog format. Be concise and user-focused.",
                   messages: [{role:"user", content:("Release "+$to+" from "+$from+":\n\n"+$commits)}]
                 }')" \
-            | jq -r '.content[0].text')
+            | jq -r '.content[0].text' > "$CHANGELOG_FILE"
 
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG"     >> $GITHUB_OUTPUT
-          echo "EOF"            >> $GITHUB_OUTPUT
-          echo "$CHANGELOG"     >> $GITHUB_STEP_SUMMARY
+          # Surface in Step Summary (safe — written directly from the file)
+          cat "$CHANGELOG_FILE" >> $GITHUB_STEP_SUMMARY
+
+          echo "generated=true"          >> $GITHUB_OUTPUT
+          echo "file=$CHANGELOG_FILE"    >> $GITHUB_OUTPUT
+
+      - name: Upload changelog artifact
+        if: steps.changelog.outputs.generated == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-changelog
+          path: /tmp/new-changelog.md
+          retention-days: 1
 
       - name: Commit updated CHANGELOG.md
-        if: steps.changelog.outputs.changelog != ''
+        if: steps.changelog.outputs.generated == 'true'
         run: |
-          CHANGELOG="${{ steps.changelog.outputs.changelog }}"
+          CHANGELOG_FILE="${{ steps.changelog.outputs.file }}"
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Read directly from the file — no shell interpolation of markdown content
           if [ -f CHANGELOG.md ] && grep -q "^# Changelog" CHANGELOG.md; then
-            awk -v new="$CHANGELOG" '
-              /^# Changelog/ { print; if (getline > 0) print; print ""; print new; print ""; next }
+            NEW_CONTENT_FILE="$CHANGELOG_FILE" \
+            awk '
+              BEGIN { inserted = 0 }
+              !inserted && /^## \[/ {
+                print ""
+                while ((getline line < ENVIRON["NEW_CONTENT_FILE"]) > 0) print line
+                close(ENVIRON["NEW_CONTENT_FILE"])
+                print ""
+                inserted = 1
+              }
               { print }
             ' CHANGELOG.md > /tmp/cl.tmp && mv /tmp/cl.tmp CHANGELOG.md
           else
-            printf "# Changelog\n\n%s\n" "$CHANGELOG" > CHANGELOG.md
+            printf "# Changelog\n\n" > CHANGELOG.md
+            cat "$CHANGELOG_FILE"   >> CHANGELOG.md
           fi
 
           git add CHANGELOG.md
