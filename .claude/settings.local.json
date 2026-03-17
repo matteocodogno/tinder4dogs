@@ -3,7 +3,9 @@
     "allow": [
       "mcp__tinder-for-dogs-mcp__create_dog_profile",
       "mcp__tinder-for-dogs-mcp__get_best_match",
-      "Bash(./mvnw test:*)"
+      "Bash(./mvnw test:*)",
+      "Bash(find /home/giig/work/tinder4dogs -type f \\\\\\(-name Justfile -o -name pom.xml -o -name compose.yaml -o -name docker-compose.yml -o -name .env* -o -name CHANGELOG.md -o -name .trivy* -o -name .gitleaks* \\\\\\))",
+      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\(''.github/workflows/ci.yml''\\)\\)\")"
     ]
   }
 }

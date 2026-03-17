@@ -1227,3 +1227,348 @@ gen-tests file:
 #    @echo -e "{{ YELLOW }}🧹 Cleaning Docker volumes...{{ NC }}"
 #    @cd ~/.ai && docker-compose down -v
 #    @echo -e "{{ GREEN }}✅ Everything cleaned{{ NC }}"
+
+# ============================================
+# PIPELINE: Baseline (lint → test → build)
+# ============================================
+
+# Run full baseline pipeline: lint → tests → build
+pipeline: lint test build
+    @echo -e "{{ GREEN }}✅ Pipeline complete: lint, tests, build all passed{{ NC }}"
+
+# Lint Kotlin sources with ktlint; falls back to Maven compile check
+lint:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🔎 Linting Kotlin sources...{{ NC }}"
+    if command -v ktlint &> /dev/null; then
+        ktlint 'src/**/*.kt' --reporter=plain
+        echo -e "{{ GREEN }}✅ Lint passed (ktlint){{ NC }}"
+    else
+        echo -e "{{ YELLOW }}⚠️  ktlint not found – falling back to Maven compile check{{ NC }}"
+        echo    "   Install: brew install ktlint   OR   mise use -g ktlint"
+        ./mvnw --batch-mode compile -q
+        echo -e "{{ GREEN }}✅ Compile check passed (install ktlint for full linting){{ NC }}"
+    fi
+
+# ============================================
+# AI: PR Summary
+# ============================================
+
+# Generate an AI-powered PR summary from the current branch diff
+pr-summary base="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}📋 Generating AI PR summary vs {{base}}...{{ NC }}"
+
+    # ── collect diff (source files only, cap at 12 KB) ──────────────
+    DIFF=$(git diff "origin/{{base}}...HEAD" -- '*.kt' '*.yml' '*.yaml' '*.json' '*.md' \
+        2>/dev/null || git diff "{{base}}...HEAD" -- '*.kt' '*.yml' '*.yaml' '*.json' '*.md' \
+        2>/dev/null || true)
+
+    if [ -z "$DIFF" ]; then
+        MERGE_BASE=$(git merge-base HEAD "origin/{{base}}" 2>/dev/null \
+                     || git merge-base HEAD "{{base}}" 2>/dev/null || true)
+        [ -n "$MERGE_BASE" ] && DIFF=$(git diff "$MERGE_BASE" -- '*.kt' '*.yml' '*.yaml' '*.json' '*.md')
+    fi
+
+    if [ -z "$DIFF" ]; then
+        echo -e "{{ YELLOW }}⚠️  No diff found versus {{base}}.{{ NC }}"
+        exit 0
+    fi
+
+    DIFF=$(echo "$DIFF" | head -c 12000)
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    COMMITS=$(git log --oneline "origin/{{base}}..HEAD" 2>/dev/null | head -20 \
+              || git log --oneline -10)
+
+    # ── resolve AI backend: local LiteLLM → remote LiteLLM → Anthropic ──
+    LITELLM_BASE=$(echo "${LITELLM_URL:-http://localhost:4000/v1/chat/completions}" | sed 's|/v1/chat/completions||')
+    AI_URL="" ; AI_KEY="" ; AI_MODE=""
+
+    if [ -n "${LITELLM_MASTER_KEY:-}" ] && \
+       curl -sf --connect-timeout 2 "$LITELLM_BASE/health" > /dev/null 2>&1; then
+        AI_URL="${LITELLM_URL:-http://localhost:4000/v1/chat/completions}"
+        AI_KEY="${LITELLM_MASTER_KEY}"
+        AI_MODE="litellm"
+        echo -e "  {{ GREEN }}→ LiteLLM (local): $LITELLM_BASE{{ NC }}"
+    elif [ -n "${LITELLM_REMOTE_URL:-}" ] && [ -n "${LITELLM_MASTER_KEY:-}" ] && \
+         curl -sf --connect-timeout 4 "${LITELLM_REMOTE_URL}/health" > /dev/null 2>&1; then
+        AI_URL="${LITELLM_REMOTE_URL}/v1/chat/completions"
+        AI_KEY="${LITELLM_MASTER_KEY}"
+        AI_MODE="litellm"
+        echo -e "  {{ GREEN }}→ LiteLLM (remote): ${LITELLM_REMOTE_URL}{{ NC }}"
+    elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        AI_URL="https://api.anthropic.com/v1/messages"
+        AI_KEY="${ANTHROPIC_API_KEY}"
+        AI_MODE="anthropic"
+        echo -e "  {{ YELLOW }}→ Anthropic API direct (no LiteLLM reachable){{ NC }}"
+    else
+        echo -e "{{ RED }}❌ No AI backend available. Set LITELLM_MASTER_KEY or ANTHROPIC_API_KEY{{ NC }}"
+        exit 1
+    fi
+
+    SYSTEM_MSG="You are a senior engineer reviewing a pull request. Summarise concisely in three sections:\n1. **What changed** – bullet list\n2. **Why / motivation** – inferred from commits and diff\n3. **How to verify** – reviewer checklist\nNever invent information not in the diff."
+    USER_MSG="Branch: $BRANCH\n\nCommits:\n$COMMITS\n\nDiff (truncated):\n$DIFF"
+
+    if [ "$AI_MODE" = "anthropic" ]; then
+        PAYLOAD=$(jq -n \
+            --arg sys "$SYSTEM_MSG" --arg usr "$USER_MSG" \
+            '{model:"claude-haiku-4-5-20251001",max_tokens:700,
+              system:$sys,messages:[{role:"user",content:$usr}]}')
+        SUMMARY=$(curl -s "$AI_URL" \
+            -H "x-api-key: $AI_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$PAYLOAD" | jq -r '.content[0].text')
+    else
+        PAYLOAD=$(jq -n \
+            --arg sys "$SYSTEM_MSG" --arg usr "$USER_MSG" \
+            '{model:"ci-summarizer",max_tokens:700,
+              messages:[{role:"system",content:$sys},{role:"user",content:$usr}],
+              metadata:{tags:["ci","pr-summary"],project:"{{PROJECT_NAME}}"}}')
+        SUMMARY=$(curl -s "$AI_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $AI_KEY" \
+            -d "$PAYLOAD" | jq -r '.choices[0].message.content')
+    fi
+
+    echo ""
+    echo "## PR Summary: $BRANCH"
+    echo ""
+    echo "$SUMMARY"
+
+    mkdir -p reviews
+    OUTFILE="reviews/pr-summary-$(date +%Y%m%d-%H%M%S).md"
+    printf "# PR Summary: %s\n\n%s\n" "$BRANCH" "$SUMMARY" > "$OUTFILE"
+    echo ""
+    echo -e "{{ GREEN }}✅ Saved to $OUTFILE{{ NC }}"
+
+# ============================================
+# SECURITY: Gitleaks + Trivy
+# ============================================
+
+# Scan the repository for leaked secrets with Gitleaks
+scan-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🔐 Scanning for secrets with Gitleaks...{{ NC }}"
+
+    if ! command -v gitleaks &> /dev/null; then
+        echo -e "{{ RED }}❌ gitleaks not found.  Install: brew install gitleaks{{ NC }}"
+        exit 1
+    fi
+
+    mkdir -p target/security
+    REPORT="target/security/gitleaks-$(date +%Y%m%d-%H%M%S).json"
+
+    if gitleaks detect --source . \
+        --report-format json \
+        --report-path "$REPORT" \
+        --exit-code 1 \
+        --redact 2>&1; then
+        echo -e "{{ GREEN }}✅ No secrets detected{{ NC }}"
+    else
+        COUNT=$(jq 'length' "$REPORT" 2>/dev/null || echo "?")
+        echo -e "{{ RED }}❌ $COUNT secret(s) detected! Fix before committing.{{ NC }}"
+        echo "   Report: $REPORT"
+        jq -r '.[] | "  [\(.RuleID)] \(.File):\(.StartLine) — \(.Description)"' "$REPORT" 2>/dev/null || true
+        exit 1
+    fi
+
+# Run Trivy filesystem scan; AI-triage any CRITICAL findings
+scan-trivy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🛡️  Running Trivy vulnerability scan...{{ NC }}"
+
+    mkdir -p target/security
+    REPORT="target/security/trivy-$(date +%Y%m%d-%H%M%S).json"
+
+    # ── run trivy (local) or fall back to Docker ─────────────────────
+    if command -v trivy &> /dev/null; then
+        trivy fs . \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --format json \
+            --output "$REPORT" \
+            --quiet
+    elif command -v docker &> /dev/null; then
+        echo -e "{{ YELLOW }}⚠️  trivy not installed locally – using Docker{{ NC }}"
+        docker run --rm \
+            -v "$(pwd):/workdir" -w /workdir \
+            aquasec/trivy:latest fs . \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --format json \
+            --output "$REPORT" \
+            --quiet
+    else
+        echo -e "{{ RED }}❌ Neither trivy nor docker found.{{ NC }}"
+        echo    "   Install: brew install trivy   OR   mise use -g trivy"
+        exit 1
+    fi
+
+    # ── summary counts ────────────────────────────────────────────────
+    CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' "$REPORT" 2>/dev/null || echo 0)
+    HIGH=$(jq     '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")]     | length' "$REPORT" 2>/dev/null || echo 0)
+    TOTAL=$((CRITICAL + HIGH))
+
+    echo ""
+    printf "Findings: %d CRITICAL  %d HIGH  (%d total shown)\n" "$CRITICAL" "$HIGH" "$TOTAL"
+    echo "Report:   $REPORT"
+
+    if [ "$TOTAL" -gt 0 ]; then
+        echo ""
+        jq -r '
+            .Results[]? | select(.Vulnerabilities) |
+            .Target as $t |
+            .Vulnerabilities[] |
+            "  [\(.Severity)] \(.VulnerabilityID)  \(.PkgName) \(.InstalledVersion) → \(.FixedVersion // "no fix")  (\($t))"
+        ' "$REPORT"
+    fi
+
+    # ── no criticals: done ────────────────────────────────────────────
+    if [ "$CRITICAL" -eq 0 ]; then
+        echo ""
+        echo -e "{{ GREEN }}✅ No CRITICAL vulnerabilities{{ NC }}"
+        exit 0
+    fi
+
+    # ── AI triage of CRITICAL findings ───────────────────────────────
+    echo ""
+    echo -e "{{ YELLOW }}⚡ Running AI triage on $CRITICAL CRITICAL finding(s)...{{ NC }}"
+
+    FINDINGS=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL") |
+        {id:.VulnerabilityID,pkg:.PkgName,installed:.InstalledVersion,
+         fixed:.FixedVersion,title:.Title,url:.PrimaryURL}]' "$REPORT")
+
+    # resolve AI backend (same logic as pr-summary)
+    LITELLM_BASE=$(echo "${LITELLM_URL:-http://localhost:4000/v1/chat/completions}" | sed 's|/v1/chat/completions||')
+    AI_URL="" ; AI_KEY="" ; AI_MODE=""
+
+    if [ -n "${LITELLM_MASTER_KEY:-}" ] && \
+       curl -sf --connect-timeout 2 "$LITELLM_BASE/health" > /dev/null 2>&1; then
+        AI_URL="${LITELLM_URL:-http://localhost:4000/v1/chat/completions}"
+        AI_KEY="${LITELLM_MASTER_KEY}" ; AI_MODE="litellm"
+    elif [ -n "${LITELLM_REMOTE_URL:-}" ] && [ -n "${LITELLM_MASTER_KEY:-}" ] && \
+         curl -sf --connect-timeout 4 "${LITELLM_REMOTE_URL}/health" > /dev/null 2>&1; then
+        AI_URL="${LITELLM_REMOTE_URL}/v1/chat/completions"
+        AI_KEY="${LITELLM_MASTER_KEY}" ; AI_MODE="litellm"
+    elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        AI_URL="https://api.anthropic.com/v1/messages"
+        AI_KEY="${ANTHROPIC_API_KEY}" ; AI_MODE="anthropic"
+    else
+        echo -e "{{ YELLOW }}⚠️  No AI backend – skipping triage (set LITELLM_MASTER_KEY or ANTHROPIC_API_KEY){{ NC }}"
+        exit 1
+    fi
+
+    SYS="Triage CVEs for a Kotlin/Spring Boot Maven API. For each CRITICAL CVE state: (1) exploitability in this context, (2) recommended action, (3) urgency. End with exactly one of: VERDICT: BLOCK  or  VERDICT: ALLOW"
+    USR="Triage these CRITICAL CVEs:\n$(echo "$FINDINGS" | jq -c .)"
+
+    if [ "$AI_MODE" = "anthropic" ]; then
+        PAYLOAD=$(jq -n --arg s "$SYS" --arg u "$USR" \
+            '{model:"claude-haiku-4-5-20251001",max_tokens:900,
+              system:$s,messages:[{role:"user",content:$u}]}')
+        TRIAGE=$(curl -s "$AI_URL" \
+            -H "x-api-key: $AI_KEY" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
+            -d "$PAYLOAD" | jq -r '.content[0].text')
+    else
+        PAYLOAD=$(jq -n --arg s "$SYS" --arg u "$USR" \
+            '{model:"reviewer",max_tokens:900,
+              messages:[{role:"system",content:$s},{role:"user",content:$u}],
+              metadata:{tags:["ci","security-triage"],project:"{{PROJECT_NAME}}"}}')
+        TRIAGE=$(curl -s "$AI_URL" \
+            -H "Content-Type: application/json" -H "Authorization: Bearer $AI_KEY" \
+            -d "$PAYLOAD" | jq -r '.choices[0].message.content')
+    fi
+
+    echo ""
+    echo "=== AI Security Triage ==="
+    echo "$TRIAGE"
+
+    TRIAGE_FILE="target/security/trivy-triage-$(date +%Y%m%d-%H%M%S).md"
+    printf "# Trivy AI Triage\n\n**Date:** %s\n**Critical:** %d\n\n%s\n" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$CRITICAL" "$TRIAGE" > "$TRIAGE_FILE"
+    echo ""
+    echo "Triage saved: $TRIAGE_FILE"
+
+    if echo "$TRIAGE" | grep -q "VERDICT: BLOCK"; then
+        echo -e "{{ RED }}🚨 VERDICT: BLOCK – address critical vulnerabilities before release{{ NC }}"
+        exit 1
+    else
+        echo -e "{{ YELLOW }}⚠️  VERDICT: ALLOW – review before next release{{ NC }}"
+    fi
+
+# ============================================
+# AI COST REPORT (Langfuse)
+# ============================================
+
+# Show AI token usage and cost for recent runs from Langfuse
+ai-cost-report:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}💰 AI Cost Report from Langfuse...{{ NC }}"
+
+    HOST="${LANGFUSE_HOST:-http://localhost:3000}"
+    PUB="${LANGFUSE_PUBLIC_KEY:-}"
+    SEC="${LANGFUSE_SECRET_KEY:-}"
+
+    if [ -z "$PUB" ] || [ -z "$SEC" ]; then
+        echo -e "{{ RED }}❌ LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY must be set{{ NC }}"
+        exit 1
+    fi
+
+    # health check
+    if ! curl -sf --connect-timeout 3 "$HOST/api/public/health" > /dev/null 2>&1; then
+        echo -e "{{ RED }}❌ Cannot reach Langfuse at $HOST{{ NC }}"
+        echo    "   Start locally: just ai-start"
+        echo    "   Or: export LANGFUSE_HOST=https://cloud.langfuse.com"
+        exit 1
+    fi
+
+    RESP=$(curl -sf -u "$PUB:$SEC" \
+        "$HOST/api/public/observations?type=GENERATION&limit=100&page=1") || {
+        echo -e "{{ RED }}❌ Langfuse API request failed{{ NC }}"
+        exit 1
+    }
+
+    COUNT=$(echo "$RESP" | jq '.data | length')
+    if [ "$COUNT" = "0" ]; then
+        echo -e "{{ YELLOW }}⚠️  No generation observations found in Langfuse{{ NC }}"
+        exit 0
+    fi
+
+    echo ""
+    echo "=== Cost by Model (last $COUNT observations) ==="
+    echo "$RESP" | jq -r '
+        .data |
+        group_by(.model) |
+        map({
+            model:  (.[0].model // "unknown"),
+            calls:  length,
+            input:  ([.[].usage.input  // 0] | add),
+            output: ([.[].usage.output // 0] | add),
+            cost:   ([.[].calculatedTotalCost // 0] | add)
+        }) |
+        sort_by(-.cost) |
+        ["Model","Calls","In-tok","Out-tok","Cost-USD"],
+        (.[] | [.model, (.calls|tostring), (.input|tostring), (.output|tostring),
+                ("$" + (.cost * 100000 | round / 100000 | tostring))]) |
+        @tsv
+    ' | column -t
+
+    echo ""
+    echo "=== Total ==="
+    echo "$RESP" | jq -r '
+        .data |
+        {
+            calls:  length,
+            input:  ([.[].usage.input  // 0] | add),
+            output: ([.[].usage.output // 0] | add),
+            cost:   ([.[].calculatedTotalCost // 0] | add)
+        } |
+        "Calls:         \(.calls)\nInput tokens:  \(.input)\nOutput tokens: \(.output)\nTotal cost:    $\(.cost * 100000 | round / 100000)"
+    '
+    echo ""
+    echo -e "{{ BLUE }}ℹ️  Dashboard: $HOST{{ NC }}"
