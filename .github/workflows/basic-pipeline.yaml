@@ -101,6 +101,9 @@ jobs:
         with:
           cache: true
 
+      - name: Export JAVA_HOME from mise
+        run: echo "JAVA_HOME=$(mise where java)" >> $GITHUB_ENV
+
       - name: Set up just
         uses: extractions/setup-just@v2
 
@@ -120,6 +123,9 @@ jobs:
         uses: jdx/mise-action@v2
         with:
           cache: true
+
+      - name: Export JAVA_HOME from mise
+        run: echo "JAVA_HOME=$(mise where java)" >> $GITHUB_ENV
 
       - name: Set up just
         uses: extractions/setup-just@v2
