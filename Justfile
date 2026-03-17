@@ -408,11 +408,16 @@ _changelog-generate from_tag to_tag:
         exit 0
     fi
 
+    # resolve pipeline trace ID (written by `just pipeline`; fall back to ad-hoc)
+    TRACE_ID="${PIPELINE_TRACE_ID:-$(cat /tmp/tinder4dogs-trace-id 2>/dev/null || echo "")}"
+    [ -z "$TRACE_ID" ] && TRACE_ID="adhoc-$(date +%Y%m%d%H%M%S)-$(git rev-parse --short HEAD 2>/dev/null || echo x)"
+
     # Build JSON payload using jq
     JSON_PAYLOAD=$(jq -n \
       --arg commits "$COMMITS" \
       --arg from "$FROM_TAG" \
       --arg to "$TO_TAG" \
+      --arg tid "$TRACE_ID" \
       '{
         model: "ci-summarizer",
         max_tokens: 1000,
@@ -427,6 +432,7 @@ _changelog-generate from_tag to_tag:
           }
         ],
         metadata: {
+          trace_id: $tid,
           tags: ["ci", "changelog"],
           from_tag: $from,
           to_tag: $to,
@@ -1232,9 +1238,39 @@ gen-tests file:
 # PIPELINE: Baseline (lint → test → build)
 # ============================================
 
-# Run full baseline pipeline: lint → tests → build
-pipeline: lint test build
-    @echo -e "{{ GREEN }}✅ Pipeline complete: lint, tests, build all passed{{ NC }}"
+# Run full baseline pipeline: lint → tests → build (generates a Langfuse trace ID)
+pipeline:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # ── generate and persist a pipeline-scoped trace ID ──────────────
+    TRACE_ID="local-$(date +%Y%m%d%H%M%S)-$(git rev-parse --short HEAD 2>/dev/null || echo x)"
+    echo "$TRACE_ID" > /tmp/tinder4dogs-trace-id
+    echo -e "{{ BLUE }}🔖 Pipeline trace: $TRACE_ID{{ NC }}"
+
+    # ── register trace in Langfuse (best-effort) ─────────────────────
+    LHOST="${LANGFUSE_HOST:-http://localhost:3000}"
+    if [ -n "${LANGFUSE_PUBLIC_KEY:-}" ] && \
+       curl -sf --connect-timeout 2 "$LHOST/api/public/health" > /dev/null 2>&1; then
+        BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+        curl -sf -u "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}" \
+            "$LHOST/api/public/ingestion" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+                --arg id "$TRACE_ID" --arg branch "$BRANCH" \
+                --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{batch:[{type:"trace-create",id:("init-"+$id),timestamp:$ts,
+                  body:{id:$id,name:"local pipeline",
+                        metadata:{source:"justfile",branch:$branch}}}]}')" \
+            > /dev/null 2>&1 \
+            && echo -e "  {{ GREEN }}→ Trace registered in Langfuse{{ NC }}" \
+            || true
+    fi
+
+    just lint
+    just test
+    just build
+    echo -e "{{ GREEN }}✅ Pipeline complete — trace: $TRACE_ID{{ NC }}"
 
 # Lint Kotlin sources with ktlint; falls back to Maven compile check
 lint:
@@ -1260,6 +1296,29 @@ pr-summary base="main":
     #!/usr/bin/env bash
     set -eu
     echo -e "{{ BLUE }}📋 Generating AI PR summary vs {{base}}...{{ NC }}"
+
+    # ── resolve pipeline trace ID ────────────────────────────────────
+    TRACE_ID="${PIPELINE_TRACE_ID:-$(cat /tmp/tinder4dogs-trace-id 2>/dev/null || echo "")}"
+    [ -z "$TRACE_ID" ] && TRACE_ID="adhoc-$(date +%Y%m%d%H%M%S)-$(git rev-parse --short HEAD 2>/dev/null || echo x)"
+    echo -e "  Trace: $TRACE_ID"
+
+    # ── helper: log a generation to Langfuse ─────────────────────────
+    _langfuse_log() {
+        local tid="$1" name="$2" model="$3" inp="$4" out="$5"
+        [ -z "${LANGFUSE_PUBLIC_KEY:-}" ] && return 0
+        local host="${LANGFUSE_HOST:-http://localhost:3000}"
+        curl -sf -u "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY:-}" \
+            "$host/api/public/ingestion" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+                --arg tid "$tid" --arg name "$name" --arg model "$model" \
+                --argjson inp "$inp" --argjson out "$out" \
+                --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{batch:[{type:"generation-create",id:("gen-"+$tid+"-"+$name),timestamp:$ts,
+                  body:{traceId:$tid,name:$name,model:$model,
+                        usage:{input:$inp,output:$out}}}]}')" \
+            > /dev/null 2>&1 || true
+    }
 
     # ── collect diff (source files only, cap at 12 KB) ──────────────
     DIFF=$(git diff "origin/{{base}}...HEAD" -- '*.kt' '*.yml' '*.yaml' '*.json' '*.md' \
@@ -1316,17 +1375,21 @@ pr-summary base="main":
             --arg sys "$SYSTEM_MSG" --arg usr "$USER_MSG" \
             '{model:"claude-haiku-4-5-20251001",max_tokens:700,
               system:$sys,messages:[{role:"user",content:$usr}]}')
-        SUMMARY=$(curl -s "$AI_URL" \
+        RESPONSE=$(curl -s "$AI_URL" \
             -H "x-api-key: $AI_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -H "content-type: application/json" \
-            -d "$PAYLOAD" | jq -r '.content[0].text')
+            -d "$PAYLOAD")
+        SUMMARY=$(echo "$RESPONSE" | jq -r '.content[0].text')
+        _langfuse_log "$TRACE_ID" "pr-summary" "claude-haiku-4-5-20251001" \
+            "$(echo "$RESPONSE" | jq '.usage.input_tokens // 0')" \
+            "$(echo "$RESPONSE" | jq '.usage.output_tokens // 0')"
     else
         PAYLOAD=$(jq -n \
-            --arg sys "$SYSTEM_MSG" --arg usr "$USER_MSG" \
+            --arg sys "$SYSTEM_MSG" --arg usr "$USER_MSG" --arg tid "$TRACE_ID" \
             '{model:"ci-summarizer",max_tokens:700,
               messages:[{role:"system",content:$sys},{role:"user",content:$usr}],
-              metadata:{tags:["ci","pr-summary"],project:"{{PROJECT_NAME}}"}}')
+              metadata:{trace_id:$tid,tags:["ci","pr-summary"],project:"{{PROJECT_NAME}}"}}')
         SUMMARY=$(curl -s "$AI_URL" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $AI_KEY" \
@@ -1439,6 +1502,27 @@ scan-trivy:
     echo ""
     echo -e "{{ YELLOW }}⚡ Running AI triage on $CRITICAL CRITICAL finding(s)...{{ NC }}"
 
+    # resolve pipeline trace ID
+    TRACE_ID="${PIPELINE_TRACE_ID:-$(cat /tmp/tinder4dogs-trace-id 2>/dev/null || echo "")}"
+    [ -z "$TRACE_ID" ] && TRACE_ID="adhoc-$(date +%Y%m%d%H%M%S)-$(git rev-parse --short HEAD 2>/dev/null || echo x)"
+
+    _langfuse_log() {
+        local tid="$1" name="$2" model="$3" inp="$4" out="$5"
+        [ -z "${LANGFUSE_PUBLIC_KEY:-}" ] && return 0
+        local host="${LANGFUSE_HOST:-http://localhost:3000}"
+        curl -sf -u "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY:-}" \
+            "$host/api/public/ingestion" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+                --arg tid "$tid" --arg name "$name" --arg model "$model" \
+                --argjson inp "$inp" --argjson out "$out" \
+                --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{batch:[{type:"generation-create",id:("gen-"+$tid+"-"+$name),timestamp:$ts,
+                  body:{traceId:$tid,name:$name,model:$model,
+                        usage:{input:$inp,output:$out}}}]}')" \
+            > /dev/null 2>&1 || true
+    }
+
     FINDINGS=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL") |
         {id:.VulnerabilityID,pkg:.PkgName,installed:.InstalledVersion,
          fixed:.FixedVersion,title:.Title,url:.PrimaryURL}]' "$REPORT")
@@ -1470,14 +1554,18 @@ scan-trivy:
         PAYLOAD=$(jq -n --arg s "$SYS" --arg u "$USR" \
             '{model:"claude-haiku-4-5-20251001",max_tokens:900,
               system:$s,messages:[{role:"user",content:$u}]}')
-        TRIAGE=$(curl -s "$AI_URL" \
+        RESPONSE=$(curl -s "$AI_URL" \
             -H "x-api-key: $AI_KEY" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
-            -d "$PAYLOAD" | jq -r '.content[0].text')
+            -d "$PAYLOAD")
+        TRIAGE=$(echo "$RESPONSE" | jq -r '.content[0].text')
+        _langfuse_log "$TRACE_ID" "trivy-triage" "claude-haiku-4-5-20251001" \
+            "$(echo "$RESPONSE" | jq '.usage.input_tokens // 0')" \
+            "$(echo "$RESPONSE" | jq '.usage.output_tokens // 0')"
     else
-        PAYLOAD=$(jq -n --arg s "$SYS" --arg u "$USR" \
+        PAYLOAD=$(jq -n --arg s "$SYS" --arg u "$USR" --arg tid "$TRACE_ID" \
             '{model:"reviewer",max_tokens:900,
               messages:[{role:"system",content:$s},{role:"user",content:$u}],
-              metadata:{tags:["ci","security-triage"],project:"{{PROJECT_NAME}}"}}')
+              metadata:{trace_id:$tid,tags:["ci","security-triage"],project:"{{PROJECT_NAME}}"}}')
         TRIAGE=$(curl -s "$AI_URL" \
             -H "Content-Type: application/json" -H "Authorization: Bearer $AI_KEY" \
             -d "$PAYLOAD" | jq -r '.choices[0].message.content')
