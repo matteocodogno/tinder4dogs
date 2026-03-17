@@ -485,20 +485,31 @@ changelog-save from_tag="" to_tag="":
     TEMP_FILE=$(mktemp)
 
     if [ -f "CHANGELOG.md" ]; then
-        # Append to existing file (insert after header)
+        # Append to existing file (insert after header and description)
         if grep -q "^# Changelog" CHANGELOG.md; then
-            # Insert after the "# Changelog" line
-            awk -v new="$CHANGELOG" '
-                /^# Changelog/ {
-                    print
-                    if (getline > 0) print
+            # Insert after the header block, before first version section
+            # Save new changelog to temp file first to avoid awk multiline issues
+            NEW_CONTENT_FILE=$(mktemp)
+            echo "$CHANGELOG" > "$NEW_CONTENT_FILE"
+
+            awk -v newfile="$NEW_CONTENT_FILE" '
+                BEGIN { inserted = 0 }
+                # When we find the first version section and havent inserted yet
+                !inserted && /^## \[/ {
                     print ""
-                    print new
+                    # Read and print the new content from file
+                    while ((getline line < newfile) > 0) {
+                        print line
+                    }
+                    close(newfile)
                     print ""
-                    next
+                    inserted = 1
                 }
-                {print}
+                # Print every line
+                { print }
             ' CHANGELOG.md > "$TEMP_FILE"
+
+            rm -f "$NEW_CONTENT_FILE"
         else
             # No header found, prepend
             echo "$CHANGELOG" > "$TEMP_FILE"
