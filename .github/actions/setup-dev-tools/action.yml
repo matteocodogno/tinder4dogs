@@ -1,0 +1,12 @@
+name: 'Setup Development Tools'
+description: 'Install just and mise for development workflows'
+runs:
+  using: 'composite'
+  steps:
+    - name: Install just
+      uses: extractions/setup-just@v2
+      shell: bash
+
+    - name: Install mise
+      uses: jdx/mise-action@v2
+      shell: bash
