@@ -395,6 +395,14 @@ _call_ai role prompt_file *metadata:
 # ROLE: SECURITY
 # ============================================
 
+# Scan for secrets with gitleaks (full git history)
+secrets-scan:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🔑 Scanning for secrets with gitleaks...{{ NC }}"
+    gitleaks detect --source . --redact --verbose
+    echo -e "{{ GREEN }}✅ No secrets detected{{ NC }}"
+
 # Run Trivy filesystem scan → trivy-report.json
 security-scan:
     #!/usr/bin/env bash

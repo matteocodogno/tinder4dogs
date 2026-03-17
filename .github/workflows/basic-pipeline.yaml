@@ -75,8 +75,24 @@ jobs:
                 { owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
             }
 
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: curl -sfL https://raw.githubusercontent.com/gitleaks/gitleaks/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Set up just
+        uses: extractions/setup-just@v2
+
+      - name: Scan for secrets
+        run: just secrets-scan
+
   build:
-    needs: ktlint
+    needs: [ktlint, secrets]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
