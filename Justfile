@@ -6,7 +6,7 @@
 # ============================================
 
 # LiteLLM configuration
-LITELLM_URL := "http://localhost:4000/chat/completions"
+LITELLM_URL := "http://localhost:4000/v1/chat/completions"
 LITELLM_KEY := env_var('LITELLM_MASTER_KEY')
 
 # Project configuration
@@ -581,6 +581,73 @@ commit:
     if [ "$confirm" = "y" ]; then
       git commit -m "$MSG"
       echo "✅ Committed"
+    else
+      echo "❌ Aborted"
+    fi
+
+# Changelog with AI-generated message
+changelog hash="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "💬 Generating changelog message..."
+
+    FROM_TAG=${1:-$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || \
+      { [ -n "{{hash}}" ] && echo "{{hash}}"; } || \
+      git rev-list --max-parents=0 HEAD)}
+    TO_TAG=${2:-HEAD}
+    COMMITS=$(git log "${FROM_TAG}..${TO_TAG}" --pretty=format:"%s%n%b" --no-merges)
+
+    echo "🔍 FROM: $FROM_TAG → TO: $TO_TAG"
+    echo "📦 Commits found: $(echo "$COMMITS" | grep -c . || echo 0)"
+
+    PAYLOAD="$(jq -n --arg c "$COMMITS" --arg f "$FROM_TAG" --arg t "$TO_TAG" '{
+          model: "ci-summarizer",
+          max_tokens: 1000
+          messages: [
+            {role: "system", content: "Write a CHANGELOG.md using Keep a Changelog format. Group commits by type (Added, Changed, Fixed, etc.). Bold any BREAKING CHANGES."},
+            {role: "user", content: "Release \($t) from \($f):\n\($c)"}
+          ],
+          metadata: {
+          tags: ["ci, "changelog"]
+          
+          }
+        }')"
+
+    echo "📤 Sending request to {{LITELLM_URL}}..."
+    echo "📤 with payload: $PAYLOAD "
+
+    RESPONSE="$(curl -s -w "\n%{http_code}" --max-time 120 "{{LITELLM_URL}}" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer {{LITELLM_KEY}}" \
+          -d "$PAYLOAD")"
+
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+
+    echo "📥 HTTP status: $HTTP_CODE"
+    if [ "$HTTP_CODE" != "200" ]; then
+      echo "❌ API error response:"
+      echo "$BODY"
+      exit 1
+    fi
+
+    MSG="$(echo "$BODY" | jq -r '.choices[0].message.content')"
+
+    if [ -z "$MSG" ] || [ "$MSG" = "null" ]; then
+      echo "❌ Failed to extract message from response:"
+      echo "$BODY"
+      exit 1
+    fi
+
+    echo "📝 Changelog:"
+    echo "$MSG"
+    echo ""
+    echo "Proceed? (y/N)"
+    read -r confirm
+
+    if [ "$confirm" = "y" ]; then
+      echo "$MSG" >> CHANGELOG.md
+      echo "✅ Written to CHANGELOG.md"
     else
       echo "❌ Aborted"
     fi
