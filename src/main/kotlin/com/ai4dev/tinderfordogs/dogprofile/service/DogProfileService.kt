@@ -31,9 +31,7 @@ class DogProfileService(
     }
 
     @Transactional(readOnly = true)
-    fun findAll(): List<DogProfileResponse> {
-        return repository.findAll().map { it.toResponse() }
-    }
+    fun findAll(): List<DogProfileResponse> = repository.findAll().map { it.toResponse() }
 
     private fun DogProfile.toResponse() =
         DogProfileResponse(

@@ -1,0 +1,16 @@
+name: 'Setup Development Tools'
+description: 'Install just and mise for development workflows'
+runs:
+  using: 'composite'
+  steps:
+    - name: Install just
+      uses: extractions/setup-just@v2
+
+    - name: Install mise
+      uses: jdx/mise-action@v2
+
+    - name: Export mise environment
+      run: |
+        mise env --shell bash | sed 's/^export //' >> "$GITHUB_ENV"
+        mise bin-paths >> "$GITHUB_PATH"
+      shell: bash

@@ -7,7 +7,7 @@
 
 # LiteLLM configuration
 LITELLM_URL := "http://localhost:4000/chat/completions"
-LITELLM_KEY := env_var('LITELLM_MASTER_KEY')
+LITELLM_KEY := env_var_or_default('LITELLM_MASTER_KEY', 'whysoserious')
 
 # Project configuration
 PROJECT_NAME := "tinder-for-dogs"
@@ -183,6 +183,7 @@ check-mise:
     fi
 
     echo -e "{{ GREEN }}✅ mise is active{{ NC }}"
+    echo -e "$(java --version)"
 
 ## Check environment variables
 check-env:
@@ -1127,3 +1128,172 @@ gen-tests file:
 #    @echo -e "{{ YELLOW }}🧹 Cleaning Docker volumes...{{ NC }}"
 #    @cd ~/.ai && docker-compose down -v
 #    @echo -e "{{ GREEN }}✅ Everything cleaned{{ NC }}"
+
+# ============================================
+# Code Quality
+# ============================================
+
+# Run ktlint to check Kotlin code style
+lint: check-mise
+    @echo "{{ BLUE }}🔍 Running ktlint...{{ NC }}"
+    @./mvnw ktlint:check
+    @echo "{{ GREEN }}✅ Lint check complete{{ NC }}"
+
+# Auto-format Kotlin code with ktlint
+lint-format: check-mise
+    @echo "{{ BLUE }}✨ Formatting Kotlin code...{{ NC }}"
+    @./mvnw ktlint:format
+    @echo "{{ GREEN }}✅ Code formatted{{ NC }}"
+
+# ============================================
+# Course excercise
+# ============================================
+
+# ============================================
+# Security
+# ============================================
+
+# Run Trivy security scan with AI-powered triage
+trivy-scan:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo -e "{{ BLUE }}🔒 Running Trivy security scan...{{ NC }}"
+
+    # Run Trivy scan
+    docker run --rm -v "$(pwd):/scan" aquasec/trivy:latest fs \
+      --format json \
+      --output /scan/trivy-report.json \
+      --severity CRITICAL,HIGH \
+      --ignore-unfixed \
+      /scan
+
+    # Print all findings
+    echo -e "{{ BLUE }}=== Trivy Security Scan Results ==={{ NC }}"
+    if [ -f trivy-report.json ]; then
+        jq -r '.Results[]? | select(.Vulnerabilities) | "
+        \n📦 Target: \(.Target)
+        \nVulnerabilities found: \(.Vulnerabilities | length)
+        \n" + (.Vulnerabilities[] | "
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        🔴 [\(.Severity)] \(.VulnerabilityID)
+        📌 Package: \(.PkgName) (\(.InstalledVersion))
+        ✅ Fixed in: \(.FixedVersion // "Not available")
+        📝 \(.Title)
+        🔗 \(.PrimaryURL // "")
+        ")' trivy-report.json || echo "No vulnerabilities found"
+    else
+        echo "No trivy-report.json file found"
+    fi
+
+    # AI security triage
+    echo -e "{{ BLUE }}🤖 Running AI security triage...{{ NC }}"
+
+    CRITICAL=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-report.json)
+
+    if [ "$CRITICAL" -eq "0" ]; then
+        echo -e "{{ GREEN }}✅ No critical vulnerabilities found{{ NC }}"
+        echo "VERDICT: ALLOW"
+        exit 0
+    fi
+
+    FINDINGS=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL") | {id:.VulnerabilityID,pkg:.PkgName,installed:.InstalledVersion,fixed:.FixedVersion,title:.Title}]' trivy-report.json)
+
+    # Call Claude API for triage
+    TRIAGE=$(curl -s https://api.anthropic.com/v1/messages \
+      -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+      -H "anthropic-version: 2023-06-01" \
+      -H "content-type: application/json" \
+      -d "$(jq -n --argjson f "$FINDINGS" '{
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 800,
+        system: "Triage CVEs for a Kotlin/Spring Boot Maven API. For each CRITICAL CVE state: exploitability in this context, recommended action, urgency. End with VERDICT: BLOCK or VERDICT: ALLOW.",
+        messages: [{role: "user", content: ("Triage:\n" + ($f | tostring))}]
+      }')" | jq -r '.content[0].text')
+
+    echo "$TRIAGE"
+
+    # Check verdict and exit accordingly
+    if echo "$TRIAGE" | grep -q "VERDICT: BLOCK"; then
+        echo -e "{{ RED }}🚨 Security scan BLOCKED{{ NC }}"
+        exit 1
+    else
+        echo -e "{{ GREEN }}✅ Security scan ALLOWED{{ NC }}"
+        exit 0
+    fi
+
+# ============================================
+# GitHub PR Summary (CI Integration)
+# ============================================
+
+# Generate AI-powered PR summary and post to GitHub
+generate-pr-summary base_ref pr_title pr_number:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    BASE_REF="{{base_ref}}"
+    PR_TITLE="{{pr_title}}"
+    PR_NUMBER="{{pr_number}}"
+
+    echo -e "{{ BLUE }}📝 Generating PR summary for PR #$PR_NUMBER...{{ NC }}"
+
+    # Generate diff for specific file types
+    DIFF=$(git diff "origin/$BASE_REF..HEAD" -- '*.kt' '*.ts' '*.yml' | head -c 12000)
+
+    if [ -z "$DIFF" ]; then
+        echo -e "{{ YELLOW }}⚠️  No changes found in tracked file types{{ NC }}"
+        exit 0
+    fi
+
+    # Build JSON payload for Anthropic API
+    JSON_PAYLOAD=$(jq -n \
+      --arg diff "$DIFF" \
+      --arg title "$PR_TITLE" \
+      '{
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 600,
+        system: "Summarise PR diffs concisely. Sections: What changed / Why / How to verify. Never invent information not in the diff.",
+        messages: [{role: "user", content: ("PR: " + $title + "\n\nDiff:\n" + $diff)}]
+      }')
+
+    # Call Anthropic API
+    echo -e "{{ BLUE }}🤖 Calling Claude to generate summary...{{ NC }}"
+    RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+      -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+      -H "anthropic-version: 2023-06-01" \
+      -H "content-type: application/json" \
+      -d "$JSON_PAYLOAD")
+
+    # Extract summary from response
+    SUMMARY=$(echo "$RESPONSE" | jq -r '.content[0].text')
+
+    if [ -z "$SUMMARY" ] || [ "$SUMMARY" = "null" ]; then
+        echo -e "{{ RED }}❌ Failed to generate summary{{ NC }}"
+        echo "$RESPONSE" | jq '.'
+        exit 1
+    fi
+
+    # Format comment body
+    COMMENT_BODY="## 🤖 AI-Generated Summary
+
+    ${SUMMARY}
+
+    ---
+    *Generated by Claude*"
+
+    # Post or update comment using gh CLI
+    echo -e "{{ BLUE }}💬 Posting comment to PR #$PR_NUMBER...{{ NC }}"
+
+    # Check if comment already exists
+    EXISTING_COMMENT_ID=$(gh pr view "$PR_NUMBER" --json comments --jq '.comments[] | select(.body | contains("🤖 AI-Generated Summary")) | .id' | head -1)
+
+    if [ -n "$EXISTING_COMMENT_ID" ]; then
+        echo -e "{{ YELLOW }}Updating existing comment...{{ NC }}"
+        echo "$COMMENT_BODY" | gh pr comment "$PR_NUMBER" --edit-last --body-file -
+    else
+        echo -e "{{ YELLOW }}Creating new comment...{{ NC }}"
+        echo "$COMMENT_BODY" | gh pr comment "$PR_NUMBER" --body-file -
+    fi
+
+    echo -e "{{ GREEN }}✅ PR summary posted successfully{{ NC }}"
+

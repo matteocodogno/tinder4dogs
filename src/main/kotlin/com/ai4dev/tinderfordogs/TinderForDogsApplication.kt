@@ -7,5 +7,5 @@ import org.springframework.boot.runApplication
 class TinderForDogsApplication
 
 fun main(args: Array<String>) {
-	runApplication<TinderForDogsApplication>(*args)
+    runApplication<TinderForDogsApplication>(*args)
 }
