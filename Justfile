@@ -1258,7 +1258,7 @@ lint:
 # Generate an AI-powered PR summary from the current branch diff
 pr-summary base="main":
     #!/usr/bin/env bash
-    set -euo pipefail
+    set -eu
     echo -e "{{ BLUE }}📋 Generating AI PR summary vs {{base}}...{{ NC }}"
 
     # ── collect diff (source files only, cap at 12 KB) ──────────────
