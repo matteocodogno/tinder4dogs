@@ -7,6 +7,14 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import kotlin.collections.plus
 
+/**
+ * Handles multi-turn support conversations by delegating to a configurable LLM via [LiteLLMService].
+ *
+ * Appends the incoming user message to the provided conversation history before sending the full
+ * context to the model, ensuring coherent multi-turn dialogue. The model used is resolved at
+ * startup from the `tinder4dogs.support.model` configuration property, allowing the support
+ * assistant to be swapped for a fine-tuned or alternative model without code changes.
+ */
 @Service
 class SupportAssistantService(
     private val llm: LiteLLMService,

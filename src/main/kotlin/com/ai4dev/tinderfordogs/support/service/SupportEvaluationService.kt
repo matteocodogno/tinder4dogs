@@ -11,6 +11,16 @@ data class ModelComparison(
     val baseModelAnswer: String,
 )
 
+/**
+ * Evaluates the quality gap between the fine-tuned support assistant and the baseline model
+ * by running the same question through both and surfacing their responses side by side.
+ *
+ * Sends an identical user message concurrently to the `support-assistant` fine-tuned model
+ * and the `gpt-4o-mini` base model via [LiteLLMService], allowing developers and product
+ * owners to qualitatively assess whether fine-tuning has produced measurably better support
+ * answers. Neither result is persisted — this service is intended for ad-hoc evaluation
+ * and A/B comparison workflows, not production support traffic.
+ */
 @Service
 class SupportEvaluationService(
     private val llm: LiteLLMService,

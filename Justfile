@@ -6,7 +6,7 @@
 # ============================================
 
 # LiteLLM configuration
-LITELLM_URL := "http://localhost:4000/chat/completions"
+LITELLM_URL := "http://localhost:4000/v1/chat/completions"
 LITELLM_KEY := env_var('LITELLM_MASTER_KEY')
 
 # Project configuration
@@ -408,11 +408,16 @@ _changelog-generate from_tag to_tag:
         exit 0
     fi
 
+    # resolve pipeline trace ID (written by `just pipeline`; fall back to ad-hoc)
+    TRACE_ID="${PIPELINE_TRACE_ID:-$(cat /tmp/tinder4dogs-trace-id 2>/dev/null || echo "")}"
+    [ -z "$TRACE_ID" ] && TRACE_ID="adhoc-$(date +%Y%m%d%H%M%S)-$(git rev-parse --short HEAD 2>/dev/null || echo x)"
+
     # Build JSON payload using jq
     JSON_PAYLOAD=$(jq -n \
       --arg commits "$COMMITS" \
       --arg from "$FROM_TAG" \
       --arg to "$TO_TAG" \
+      --arg tid "$TRACE_ID" \
       '{
         model: "ci-summarizer",
         max_tokens: 1000,
@@ -427,6 +432,7 @@ _changelog-generate from_tag to_tag:
           }
         ],
         metadata: {
+          trace_id: $tid,
           tags: ["ci", "changelog"],
           from_tag: $from,
           to_tag: $to,
@@ -565,25 +571,125 @@ commit:
     #!/usr/bin/env bash
     echo "💬 Generating commit message..."
 
-    MSG=$(just commit-msg) || MSG=""
+    CHANGELOG=$(just commit-msg) || CHANGELOG=""
 
-    if [ -z "$MSG" ]; then
+    if [ -z "$CHANGELOG" ]; then
       echo "❌ Failed to generate commit message"
       exit 1
     fi
 
     echo "📝 Commit message:"
-    echo "$MSG"
+    echo "$CHANGELOG"
     echo ""
     echo "Proceed? (y/N)"
     read -r confirm
 
     if [ "$confirm" = "y" ]; then
-      git commit -m "$MSG"
+      git commit -m "$CHANGELOG"
       echo "✅ Committed"
     else
       echo "❌ Aborted"
     fi
+
+# Changelog with AI-generated message
+changelog hash="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "💬 Generating changelog message..."
+
+    FROM_TAG=${1:-$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || \
+      { [ -n "{{hash}}" ] && echo "{{hash}}"; } || \
+      git rev-list --max-parents=0 HEAD)}
+    TO_TAG=${2:-HEAD}
+    COMMITS=$(git log "${FROM_TAG}..${TO_TAG}" --pretty=format:"%s" --no-merges)
+
+    echo "🔍 FROM: $FROM_TAG → TO: $TO_TAG"
+    echo "📦 Commits found: $(echo "$COMMITS" | grep -c . || echo 0)"
+
+    PAYLOAD="$(jq -n --arg c "$COMMITS" --arg f "$FROM_TAG" --arg t "$TO_TAG" '{
+          model: "ci-summarizer",
+          max_tokens: 1000,
+          messages: [
+            {role: "system", content: "Write a CHANGELOG.md using Keep a Changelog format. Group commits by type (Added, Changed, Fixed, etc.). Bold any BREAKING CHANGES."},
+            {role: "user", content: "Release \($t) from \($f):\n\($c)"}
+          ],
+          metadata: {
+            tags: ["ci", "changelog"],
+            from_tag: $f,
+            to_tag: $t,
+            project: "{{PROJECT_NAME}}"
+          }
+        }')"
+
+    echo "📤 Sending request to {{LITELLM_URL}}..."
+    echo "📤 with payload: $PAYLOAD "
+
+    RESPONSE="$(curl -s -w "\n%{http_code}" --max-time 240 "{{LITELLM_URL}}" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer {{LITELLM_KEY}}" \
+          -d "$PAYLOAD")"
+
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+
+    echo "📥 HTTP status: $HTTP_CODE"
+    if [ "$HTTP_CODE" != "200" ]; then
+      echo "❌ API error response:"
+      echo "$BODY"
+      exit 1
+    fi
+
+    CHANGELOG="$(echo "$BODY" | jq -r '.choices[0].message.content')"
+
+    if [ -z "$CHANGELOG" ] || [ "$CHANGELOG" = "null" ]; then
+      echo "❌ Failed to extract message from response:"
+      echo "$BODY"
+      exit 1
+    fi
+
+    # Create or update CHANGELOG.md
+    TEMP_FILE=$(mktemp)
+
+    if [ -f "CHANGELOG.md" ]; then
+        # Append to existing file (insert after header)
+        if grep -q "^# Changelog" CHANGELOG.md; then
+            # Insert after the "# Changelog" line
+            awk -v new="$CHANGELOG" '
+                /^# Changelog/ {
+                    print
+                    if (getline > 0) print
+                    print ""
+                    print new
+                    print ""
+                    next
+                }
+                {print}
+            ' CHANGELOG.md > "$TEMP_FILE"
+        else
+            # No header found, prepend
+            echo "$CHANGELOG" > "$TEMP_FILE"
+            echo "" >> "$TEMP_FILE"
+            cat CHANGELOG.md >> "$TEMP_FILE"
+        fi
+    else
+        # Create new file
+        echo "# Changelog" > "$TEMP_FILE"
+        echo "" >> "$TEMP_FILE"
+        echo "All notable changes to this project will be documented in this file." >> "$TEMP_FILE"
+        echo "" >> "$TEMP_FILE"
+        echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)," >> "$TEMP_FILE"
+        echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)." >> "$TEMP_FILE"
+        echo "" >> "$TEMP_FILE"
+        echo "$CHANGELOG" >> "$TEMP_FILE"
+    fi
+
+    mv "$TEMP_FILE" CHANGELOG.md
+
+    echo -e "{{ GREEN }}✅ Changelog saved to CHANGELOG.md{{ NC }}"
+
+
+
+
 
 # ============================================
 # ROLE: REVIEWER (Code Review)
@@ -1127,3 +1233,430 @@ gen-tests file:
 #    @echo -e "{{ YELLOW }}🧹 Cleaning Docker volumes...{{ NC }}"
 #    @cd ~/.ai && docker-compose down -v
 #    @echo -e "{{ GREEN }}✅ Everything cleaned{{ NC }}"
+
+# ============================================
+# PIPELINE: Baseline (lint → test → build)
+# ============================================
+
+# Run full baseline pipeline: lint → tests → build (generates a Langfuse trace ID)
+pipeline:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # ── generate and persist a pipeline-scoped trace ID ──────────────
+    TRACE_ID="local-$(date +%Y%m%d%H%M%S)-$(git rev-parse --short HEAD 2>/dev/null || echo x)"
+    echo "$TRACE_ID" > /tmp/tinder4dogs-trace-id
+    echo -e "{{ BLUE }}🔖 Pipeline trace: $TRACE_ID{{ NC }}"
+
+    # ── register trace in Langfuse (best-effort) ─────────────────────
+    LHOST="${LANGFUSE_HOST:-http://localhost:3000}"
+    if [ -n "${LANGFUSE_PUBLIC_KEY:-}" ] && \
+       curl -sf --connect-timeout 2 "$LHOST/api/public/health" > /dev/null 2>&1; then
+        BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+        curl -sf -u "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}" \
+            "$LHOST/api/public/ingestion" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+                --arg id "$TRACE_ID" --arg branch "$BRANCH" \
+                --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{batch:[{type:"trace-create",id:("init-"+$id),timestamp:$ts,
+                  body:{id:$id,name:"local pipeline",
+                        metadata:{source:"justfile",branch:$branch}}}]}')" \
+            > /dev/null 2>&1 \
+            && echo -e "  {{ GREEN }}→ Trace registered in Langfuse{{ NC }}" \
+            || true
+    fi
+
+    just lint
+    just test
+    just build
+    echo -e "{{ GREEN }}✅ Pipeline complete — trace: $TRACE_ID{{ NC }}"
+
+# Lint Kotlin sources with ktlint; falls back to Maven compile check
+lint:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🔎 Linting Kotlin sources...{{ NC }}"
+    if command -v ktlint &> /dev/null; then
+        ktlint --format 'src/**/*.kt' --reporter=plain
+        echo -e "{{ GREEN }}✅ Lint passed (ktlint){{ NC }}"
+    else
+        echo -e "{{ YELLOW }}⚠️  ktlint not found – falling back to Maven compile check{{ NC }}"
+        echo    "   Install: brew install ktlint   OR   mise use -g ktlint"
+        ./mvnw --batch-mode compile -q
+        echo -e "{{ GREEN }}✅ Compile check passed (install ktlint for full linting){{ NC }}"
+    fi
+
+# ============================================
+# AI: PR Summary
+# ============================================
+
+# Generate an AI-powered PR summary from the current branch diff
+pr-summary base="main":
+    #!/usr/bin/env bash
+    set -eu
+    echo -e "{{ BLUE }}📋 Generating AI PR summary vs {{base}}...{{ NC }}"
+
+    # ── resolve pipeline trace ID ────────────────────────────────────
+    TRACE_ID="${PIPELINE_TRACE_ID:-$(cat /tmp/tinder4dogs-trace-id 2>/dev/null || echo "")}"
+    [ -z "$TRACE_ID" ] && TRACE_ID="adhoc-$(date +%Y%m%d%H%M%S)-$(git rev-parse --short HEAD 2>/dev/null || echo x)"
+    echo -e "  Trace: $TRACE_ID"
+
+    # ── helper: log a generation to Langfuse ─────────────────────────
+    _langfuse_log() {
+        local tid="$1" name="$2" model="$3" inp="$4" out="$5"
+        [ -z "${LANGFUSE_PUBLIC_KEY:-}" ] && return 0
+        local host="${LANGFUSE_HOST:-http://localhost:3000}"
+        curl -sf -u "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY:-}" \
+            "$host/api/public/ingestion" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+                --arg tid "$tid" --arg name "$name" --arg model "$model" \
+                --argjson inp "$inp" --argjson out "$out" \
+                --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{batch:[{type:"generation-create",id:("gen-"+$tid+"-"+$name),timestamp:$ts,
+                  body:{traceId:$tid,name:$name,model:$model,
+                        usage:{input:$inp,output:$out}}}]}')" \
+            > /dev/null 2>&1 || true
+    }
+
+    # ── collect diff (source files only, cap at 12 KB) ──────────────
+    DIFF=$(git diff "origin/{{base}}...HEAD" -- '*.kt' '*.yml' '*.yaml' '*.json' '*.md' \
+        2>/dev/null || git diff "{{base}}...HEAD" -- '*.kt' '*.yml' '*.yaml' '*.json' '*.md' \
+        2>/dev/null || true)
+
+    if [ -z "$DIFF" ]; then
+        MERGE_BASE=$(git merge-base HEAD "origin/{{base}}" 2>/dev/null \
+                     || git merge-base HEAD "{{base}}" 2>/dev/null || true)
+        [ -n "$MERGE_BASE" ] && DIFF=$(git diff "$MERGE_BASE" -- '*.kt' '*.yml' '*.yaml' '*.json' '*.md')
+    fi
+
+    if [ -z "$DIFF" ]; then
+        echo -e "{{ YELLOW }}⚠️  No diff found versus {{base}}.{{ NC }}"
+        exit 0
+    fi
+
+    DIFF=$(echo "$DIFF" | head -c 12000)
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    COMMITS=$(git log --oneline "origin/{{base}}..HEAD" 2>/dev/null | head -20 \
+              || git log --oneline -10)
+
+    # ── resolve AI backend: local LiteLLM → remote LiteLLM → Anthropic ──
+    LITELLM_BASE=$(echo "${LITELLM_URL:-http://localhost:4000/v1/chat/completions}" | sed 's|/v1/chat/completions||')
+    AI_URL="" ; AI_KEY="" ; AI_MODE=""
+
+    if [ -n "${LITELLM_MASTER_KEY:-}" ] && \
+       curl -sf --connect-timeout 2 "$LITELLM_BASE/health" > /dev/null 2>&1; then
+        AI_URL="${LITELLM_URL:-http://localhost:4000/v1/chat/completions}"
+        AI_KEY="${LITELLM_MASTER_KEY}"
+        AI_MODE="litellm"
+        echo -e "  {{ GREEN }}→ LiteLLM (local): $LITELLM_BASE{{ NC }}"
+    elif [ -n "${LITELLM_REMOTE_URL:-}" ] && [ -n "${LITELLM_MASTER_KEY:-}" ] && \
+         curl -sf --connect-timeout 4 "${LITELLM_REMOTE_URL}/health" > /dev/null 2>&1; then
+        AI_URL="${LITELLM_REMOTE_URL}/v1/chat/completions"
+        AI_KEY="${LITELLM_MASTER_KEY}"
+        AI_MODE="litellm"
+        echo -e "  {{ GREEN }}→ LiteLLM (remote): ${LITELLM_REMOTE_URL}{{ NC }}"
+    elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        AI_URL="https://api.anthropic.com/v1/messages"
+        AI_KEY="${ANTHROPIC_API_KEY}"
+        AI_MODE="anthropic"
+        echo -e "  {{ YELLOW }}→ Anthropic API direct (no LiteLLM reachable){{ NC }}"
+    else
+        echo -e "{{ RED }}❌ No AI backend available. Set LITELLM_MASTER_KEY or ANTHROPIC_API_KEY{{ NC }}"
+        exit 1
+    fi
+
+    SYSTEM_MSG="You are a senior engineer reviewing a pull request. Summarise concisely in three sections:\n1. **What changed** – bullet list\n2. **Why / motivation** – inferred from commits and diff\n3. **How to verify** – reviewer checklist\nNever invent information not in the diff."
+    USER_MSG="Branch: $BRANCH\n\nCommits:\n$COMMITS\n\nDiff (truncated):\n$DIFF"
+
+    if [ "$AI_MODE" = "anthropic" ]; then
+        PAYLOAD=$(jq -n \
+            --arg sys "$SYSTEM_MSG" --arg usr "$USER_MSG" \
+            '{model:"claude-haiku-4-5-20251001",max_tokens:700,
+              system:$sys,messages:[{role:"user",content:$usr}]}')
+        RESPONSE=$(curl -s "$AI_URL" \
+            -H "x-api-key: $AI_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$PAYLOAD")
+        SUMMARY=$(echo "$RESPONSE" | jq -r '.content[0].text')
+        _langfuse_log "$TRACE_ID" "pr-summary" "claude-haiku-4-5-20251001" \
+            "$(echo "$RESPONSE" | jq '.usage.input_tokens // 0')" \
+            "$(echo "$RESPONSE" | jq '.usage.output_tokens // 0')"
+    else
+        PAYLOAD=$(jq -n \
+            --arg sys "$SYSTEM_MSG" --arg usr "$USER_MSG" --arg tid "$TRACE_ID" \
+            '{model:"ci-summarizer",max_tokens:700,
+              messages:[{role:"system",content:$sys},{role:"user",content:$usr}],
+              metadata:{trace_id:$tid,tags:["ci","pr-summary"],project:"{{PROJECT_NAME}}"}}')
+        SUMMARY=$(curl -s "$AI_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $AI_KEY" \
+            -d "$PAYLOAD" | jq -r '.choices[0].message.content')
+    fi
+
+    echo ""
+    echo "## PR Summary: $BRANCH"
+    echo ""
+    echo "$SUMMARY"
+
+    mkdir -p reviews
+    OUTFILE="reviews/pr-summary-$(date +%Y%m%d-%H%M%S).md"
+    printf "# PR Summary: %s\n\n%s\n" "$BRANCH" "$SUMMARY" > "$OUTFILE"
+    echo ""
+    echo -e "{{ GREEN }}✅ Saved to $OUTFILE{{ NC }}"
+
+# ============================================
+# SECURITY: Gitleaks + Trivy
+# ============================================
+
+# Scan the repository for leaked secrets with Gitleaks
+scan-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🔐 Scanning for secrets with Gitleaks...{{ NC }}"
+
+    if ! command -v gitleaks &> /dev/null; then
+        echo -e "{{ RED }}❌ gitleaks not found.  Install: brew install gitleaks{{ NC }}"
+        exit 1
+    fi
+
+    mkdir -p target/security
+    REPORT="target/security/gitleaks-$(date +%Y%m%d-%H%M%S).json"
+
+    if gitleaks detect --source . \
+        --report-format json \
+        --report-path "$REPORT" \
+        --exit-code 1 \
+        --redact 2>&1; then
+        echo -e "{{ GREEN }}✅ No secrets detected{{ NC }}"
+    else
+        COUNT=$(jq 'length' "$REPORT" 2>/dev/null || echo "?")
+        echo -e "{{ RED }}❌ $COUNT secret(s) detected! Fix before committing.{{ NC }}"
+        echo "   Report: $REPORT"
+        jq -r '.[] | "  [\(.RuleID)] \(.File):\(.StartLine) — \(.Description)"' "$REPORT" 2>/dev/null || true
+        exit 1
+    fi
+
+# Run Trivy filesystem scan; AI-triage any CRITICAL findings
+scan-trivy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🛡️  Running Trivy vulnerability scan...{{ NC }}"
+
+    mkdir -p target/security
+    REPORT="target/security/trivy-$(date +%Y%m%d-%H%M%S).json"
+
+    # ── run trivy (local) or fall back to Docker ─────────────────────
+    if command -v trivy &> /dev/null; then
+        trivy fs . \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --format json \
+            --output "$REPORT" \
+            --quiet
+    elif command -v docker &> /dev/null; then
+        echo -e "{{ YELLOW }}⚠️  trivy not installed locally – using Docker{{ NC }}"
+        docker run --rm \
+            -v "$(pwd):/workdir" -w /workdir \
+            aquasec/trivy:latest fs . \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --format json \
+            --output "$REPORT" \
+            --quiet
+    else
+        echo -e "{{ RED }}❌ Neither trivy nor docker found.{{ NC }}"
+        echo    "   Install: brew install trivy   OR   mise use -g trivy"
+        exit 1
+    fi
+
+    # ── summary counts ────────────────────────────────────────────────
+    CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' "$REPORT" 2>/dev/null || echo 0)
+    HIGH=$(jq     '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")]     | length' "$REPORT" 2>/dev/null || echo 0)
+    TOTAL=$((CRITICAL + HIGH))
+
+    echo ""
+    printf "Findings: %d CRITICAL  %d HIGH  (%d total shown)\n" "$CRITICAL" "$HIGH" "$TOTAL"
+    echo "Report:   $REPORT"
+
+    if [ "$TOTAL" -gt 0 ]; then
+        echo ""
+        jq -r '
+            .Results[]? | select(.Vulnerabilities) |
+            .Target as $t |
+            .Vulnerabilities[] |
+            "  [\(.Severity)] \(.VulnerabilityID)  \(.PkgName) \(.InstalledVersion) → \(.FixedVersion // "no fix")  (\($t))"
+        ' "$REPORT"
+    fi
+
+    # ── no criticals: done ────────────────────────────────────────────
+    if [ "$CRITICAL" -eq 0 ]; then
+        echo ""
+        echo -e "{{ GREEN }}✅ No CRITICAL vulnerabilities{{ NC }}"
+        exit 0
+    fi
+
+    # ── AI triage of CRITICAL findings ───────────────────────────────
+    echo ""
+    echo -e "{{ YELLOW }}⚡ Running AI triage on $CRITICAL CRITICAL finding(s)...{{ NC }}"
+
+    # resolve pipeline trace ID
+    TRACE_ID="${PIPELINE_TRACE_ID:-$(cat /tmp/tinder4dogs-trace-id 2>/dev/null || echo "")}"
+    [ -z "$TRACE_ID" ] && TRACE_ID="adhoc-$(date +%Y%m%d%H%M%S)-$(git rev-parse --short HEAD 2>/dev/null || echo x)"
+
+    _langfuse_log() {
+        local tid="$1" name="$2" model="$3" inp="$4" out="$5"
+        [ -z "${LANGFUSE_PUBLIC_KEY:-}" ] && return 0
+        local host="${LANGFUSE_HOST:-http://localhost:3000}"
+        curl -sf -u "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY:-}" \
+            "$host/api/public/ingestion" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+                --arg tid "$tid" --arg name "$name" --arg model "$model" \
+                --argjson inp "$inp" --argjson out "$out" \
+                --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{batch:[{type:"generation-create",id:("gen-"+$tid+"-"+$name),timestamp:$ts,
+                  body:{traceId:$tid,name:$name,model:$model,
+                        usage:{input:$inp,output:$out}}}]}')" \
+            > /dev/null 2>&1 || true
+    }
+
+    FINDINGS=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL") |
+        {id:.VulnerabilityID,pkg:.PkgName,installed:.InstalledVersion,
+         fixed:.FixedVersion,title:.Title,url:.PrimaryURL}]' "$REPORT")
+
+    # resolve AI backend (same logic as pr-summary)
+    LITELLM_BASE=$(echo "${LITELLM_URL:-http://localhost:4000/v1/chat/completions}" | sed 's|/v1/chat/completions||')
+    AI_URL="" ; AI_KEY="" ; AI_MODE=""
+
+    if [ -n "${LITELLM_MASTER_KEY:-}" ] && \
+       curl -sf --connect-timeout 2 "$LITELLM_BASE/health" > /dev/null 2>&1; then
+        AI_URL="${LITELLM_URL:-http://localhost:4000/v1/chat/completions}"
+        AI_KEY="${LITELLM_MASTER_KEY}" ; AI_MODE="litellm"
+    elif [ -n "${LITELLM_REMOTE_URL:-}" ] && [ -n "${LITELLM_MASTER_KEY:-}" ] && \
+         curl -sf --connect-timeout 4 "${LITELLM_REMOTE_URL}/health" > /dev/null 2>&1; then
+        AI_URL="${LITELLM_REMOTE_URL}/v1/chat/completions"
+        AI_KEY="${LITELLM_MASTER_KEY}" ; AI_MODE="litellm"
+    elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        AI_URL="https://api.anthropic.com/v1/messages"
+        AI_KEY="${ANTHROPIC_API_KEY}" ; AI_MODE="anthropic"
+    else
+        echo -e "{{ YELLOW }}⚠️  No AI backend – skipping triage (set LITELLM_MASTER_KEY or ANTHROPIC_API_KEY){{ NC }}"
+        exit 1
+    fi
+
+    SYS="Triage CVEs for a Kotlin/Spring Boot Maven API. For each CRITICAL CVE state: (1) exploitability in this context, (2) recommended action, (3) urgency. End with exactly one of: VERDICT: BLOCK  or  VERDICT: ALLOW"
+    USR="Triage these CRITICAL CVEs:\n$(echo "$FINDINGS" | jq -c .)"
+
+    if [ "$AI_MODE" = "anthropic" ]; then
+        PAYLOAD=$(jq -n --arg s "$SYS" --arg u "$USR" \
+            '{model:"claude-haiku-4-5-20251001",max_tokens:900,
+              system:$s,messages:[{role:"user",content:$u}]}')
+        RESPONSE=$(curl -s "$AI_URL" \
+            -H "x-api-key: $AI_KEY" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
+            -d "$PAYLOAD")
+        TRIAGE=$(echo "$RESPONSE" | jq -r '.content[0].text')
+        _langfuse_log "$TRACE_ID" "trivy-triage" "claude-haiku-4-5-20251001" \
+            "$(echo "$RESPONSE" | jq '.usage.input_tokens // 0')" \
+            "$(echo "$RESPONSE" | jq '.usage.output_tokens // 0')"
+    else
+        PAYLOAD=$(jq -n --arg s "$SYS" --arg u "$USR" --arg tid "$TRACE_ID" \
+            '{model:"reviewer",max_tokens:900,
+              messages:[{role:"system",content:$s},{role:"user",content:$u}],
+              metadata:{trace_id:$tid,tags:["ci","security-triage"],project:"{{PROJECT_NAME}}"}}')
+        TRIAGE=$(curl -s "$AI_URL" \
+            -H "Content-Type: application/json" -H "Authorization: Bearer $AI_KEY" \
+            -d "$PAYLOAD" | jq -r '.choices[0].message.content')
+    fi
+
+    echo ""
+    echo "=== AI Security Triage ==="
+    echo "$TRIAGE"
+
+    TRIAGE_FILE="target/security/trivy-triage-$(date +%Y%m%d-%H%M%S).md"
+    printf "# Trivy AI Triage\n\n**Date:** %s\n**Critical:** %d\n\n%s\n" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$CRITICAL" "$TRIAGE" > "$TRIAGE_FILE"
+    echo ""
+    echo "Triage saved: $TRIAGE_FILE"
+
+    if echo "$TRIAGE" | grep -q "VERDICT: BLOCK"; then
+        echo -e "{{ RED }}🚨 VERDICT: BLOCK – address critical vulnerabilities before release{{ NC }}"
+        exit 1
+    else
+        echo -e "{{ YELLOW }}⚠️  VERDICT: ALLOW – review before next release{{ NC }}"
+    fi
+
+# ============================================
+# AI COST REPORT (Langfuse)
+# ============================================
+
+# Show AI token usage and cost for recent runs from Langfuse
+ai-cost-report:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}💰 AI Cost Report from Langfuse...{{ NC }}"
+
+    HOST="${LANGFUSE_HOST:-http://localhost:3000}"
+    PUB="${LANGFUSE_PUBLIC_KEY:-}"
+    SEC="${LANGFUSE_SECRET_KEY:-}"
+
+    if [ -z "$PUB" ] || [ -z "$SEC" ]; then
+        echo -e "{{ RED }}❌ LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY must be set{{ NC }}"
+        exit 1
+    fi
+
+    # health check
+    if ! curl -sf --connect-timeout 3 "$HOST/api/public/health" > /dev/null 2>&1; then
+        echo -e "{{ RED }}❌ Cannot reach Langfuse at $HOST{{ NC }}"
+        echo    "   Start locally: just ai-start"
+        echo    "   Or: export LANGFUSE_HOST=https://cloud.langfuse.com"
+        exit 1
+    fi
+
+    RESP=$(curl -sf -u "$PUB:$SEC" \
+        "$HOST/api/public/observations?type=GENERATION&limit=100&page=1") || {
+        echo -e "{{ RED }}❌ Langfuse API request failed{{ NC }}"
+        exit 1
+    }
+
+    COUNT=$(echo "$RESP" | jq '.data | length')
+    if [ "$COUNT" = "0" ]; then
+        echo -e "{{ YELLOW }}⚠️  No generation observations found in Langfuse{{ NC }}"
+        exit 0
+    fi
+
+    echo ""
+    echo "=== Cost by Model (last $COUNT observations) ==="
+    echo "$RESP" | jq -r '
+        .data |
+        group_by(.model) |
+        map({
+            model:  (.[0].model // "unknown"),
+            calls:  length,
+            input:  ([.[].usage.input  // 0] | add),
+            output: ([.[].usage.output // 0] | add),
+            cost:   ([.[].calculatedTotalCost // 0] | add)
+        }) |
+        sort_by(-.cost) |
+        ["Model","Calls","In-tok","Out-tok","Cost-USD"],
+        (.[] | [.model, (.calls|tostring), (.input|tostring), (.output|tostring),
+                ("$" + (.cost * 100000 | round / 100000 | tostring))]) |
+        @tsv
+    ' | column -t
+
+    echo ""
+    echo "=== Total ==="
+    echo "$RESP" | jq -r '
+        .data |
+        {
+            calls:  length,
+            input:  ([.[].usage.input  // 0] | add),
+            output: ([.[].usage.output // 0] | add),
+            cost:   ([.[].calculatedTotalCost // 0] | add)
+        } |
+        "Calls:         \(.calls)\nInput tokens:  \(.input)\nOutput tokens: \(.output)\nTotal cost:    $\(.cost * 100000 | round / 100000)"
+    '
+    echo ""
+    echo -e "{{ BLUE }}ℹ️  Dashboard: $HOST{{ NC }}"

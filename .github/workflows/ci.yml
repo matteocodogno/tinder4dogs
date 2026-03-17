@@ -1,0 +1,562 @@
+name: CI Pipeline
+
+# Mirrors all local `just` pipeline stages:
+#   lint → test → build → pr-summary → trivy → gitleaks → changelog → ai-cost-report
+#
+# NOTE: pr-summary.yml and security.yaml are superseded by this workflow.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  schedule:
+    - cron: '0 3 * * *'   # nightly security scan
+
+permissions:
+  pull-requests: write
+  contents: write          # needed for changelog commit
+  security-events: write
+
+env:
+  JAVA_VERSION: '24'
+  MAVEN_OPTS: '-Xmx1024m -Dfile.encoding=UTF-8'
+
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+
+  # ── 0. Setup: generate pipeline trace ID and register it in Langfuse ─────
+  setup:
+    name: Pipeline Setup (Trace ID)
+    runs-on: ubuntu-latest
+    outputs:
+      trace_id: ${{ steps.trace.outputs.trace_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate trace ID and register in Langfuse
+        id: trace
+        env:
+          LANGFUSE_HOST:       ${{ vars.LANGFUSE_HOST }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+        run: |
+          SHA="${{ github.sha }}"
+          TRACE_ID="ci-${{ github.run_id }}-${SHA:0:7}"
+          echo "trace_id=$TRACE_ID" >> $GITHUB_OUTPUT
+          echo "Pipeline trace ID: $TRACE_ID"
+
+          # Register trace in Langfuse (best-effort — skips if credentials absent)
+          HOST="${LANGFUSE_HOST:-https://cloud.langfuse.com}"
+          if [ -n "${LANGFUSE_PUBLIC_KEY:-}" ] && [ -n "${LANGFUSE_SECRET_KEY:-}" ]; then
+            curl -sf -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+              "$HOST/api/public/ingestion" \
+              -H "content-type: application/json" \
+              -d "$(jq -n \
+                --arg id    "$TRACE_ID" \
+                --arg repo  "${{ github.repository }}" \
+                --arg ref   "${{ github.ref_name }}" \
+                --arg run   "${{ github.run_id }}" \
+                --arg ts    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{batch:[{type:"trace-create",id:("init-"+$id),timestamp:$ts,
+                  body:{id:$id,name:"CI Pipeline",
+                        metadata:{source:"github-actions",repo:$repo,ref:$ref,run_id:$run}}}]}')" \
+              > /dev/null 2>&1 \
+              && echo "Trace registered in Langfuse at $HOST" \
+              || echo "Langfuse registration skipped (unreachable or bad credentials)"
+          else
+            echo "LANGFUSE_PUBLIC_KEY not set — trace registration skipped"
+          fi
+
+  # ── 1. Lint ──────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ktlint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Install ktlint
+        run: |
+          KTLINT_VERSION=$(curl -s https://api.github.com/repos/pinterest/ktlint/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4)
+          curl -sSLO \
+            "https://github.com/pinterest/ktlint/releases/download/${KTLINT_VERSION}/ktlint"
+          chmod +x ktlint
+          sudo mv ktlint /usr/local/bin/ktlint
+          ktlint --version
+
+      - name: Run ktlint
+        run: ktlint 'src/**/*.kt' --reporter=plain
+
+  # ── 2. Test + Coverage ───────────────────────────────────────────────────
+  test:
+    name: Test + Coverage (JaCoCo)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Run tests with JaCoCo
+        run: ./mvnw --batch-mode verify
+
+      - name: Upload JaCoCo report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+          retention-days: 14
+
+  # ── 3. Build ─────────────────────────────────────────────────────────────
+  build:
+    name: Build JAR
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Package (skip tests)
+        run: ./mvnw --batch-mode package -DskipTests -q
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/*.jar
+          retention-days: 7
+
+  # ── 4. AI PR Summary (PRs only) ──────────────────────────────────────────
+  pr-summary:
+    name: AI PR Summary
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [setup, lint, test, build]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate diff (source files, cap 12 KB)
+        run: |
+          git diff "origin/${{ github.base_ref }}..HEAD" \
+            -- '*.kt' '*.yml' '*.yaml' '*.json' '*.md' \
+            > /tmp/pr.diff
+          wc -c /tmp/pr.diff
+
+      - name: Generate AI summary via Claude Haiku
+        id: summary
+        env:
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+          PIPELINE_TRACE_ID:   ${{ needs.setup.outputs.trace_id }}
+          LANGFUSE_HOST:       ${{ vars.LANGFUSE_HOST }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+        run: |
+          DIFF=$(head -c 12000 /tmp/pr.diff)
+          COMMITS=$(git log --oneline "origin/${{ github.base_ref }}..HEAD" | head -20)
+          TITLE="${{ github.event.pull_request.title }}"
+
+          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+                --arg diff    "$DIFF" \
+                --arg commits "$COMMITS" \
+                --arg title   "$TITLE" \
+                '{
+                  model: "claude-haiku-4-5-20251001",
+                  max_tokens: 700,
+                  system: "Summarise PR diffs concisely. Sections: 1. What changed (bullets) / 2. Why/motivation / 3. How to verify (reviewer checklist). Never invent information not present in the diff.",
+                  messages: [{role:"user", content:("PR: "+$title+"\n\nCommits:\n"+$commits+"\n\nDiff:\n"+$diff)}]
+                }')")
+          SUMMARY=$(echo "$RESPONSE" | jq -r '.content[0].text')
+
+          # Log generation to Langfuse under the pipeline trace
+          if [ -n "${LANGFUSE_PUBLIC_KEY:-}" ]; then
+            HOST="${LANGFUSE_HOST:-https://cloud.langfuse.com}"
+            INP=$(echo "$RESPONSE" | jq '.usage.input_tokens  // 0')
+            OUT=$(echo "$RESPONSE" | jq '.usage.output_tokens // 0')
+            curl -sf -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+              "$HOST/api/public/ingestion" \
+              -H "content-type: application/json" \
+              -d "$(jq -n \
+                --arg tid "$PIPELINE_TRACE_ID" --argjson inp "$INP" --argjson out "$OUT" \
+                --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{batch:[{type:"generation-create",id:("gen-"+$tid+"-pr-summary"),timestamp:$ts,
+                  body:{traceId:$tid,name:"pr-summary",model:"claude-haiku-4-5-20251001",
+                        usage:{input:$inp,output:$out}}}]}')" \
+              > /dev/null 2>&1 || true
+          fi
+
+          echo "summary<<EOF" >> $GITHUB_OUTPUT
+          echo "$SUMMARY"    >> $GITHUB_OUTPUT
+          echo "EOF"         >> $GITHUB_OUTPUT
+
+      - name: Post or update PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const summary = ${{ toJSON(steps.summary.outputs.summary) }};
+            const body    = `## 🤖 AI PR Summary\n\n${summary}\n\n---\n*Claude Haiku · CI pipeline*`;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+            const existing = comments.find(c => c.body.includes('🤖 AI PR Summary'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body
+              });
+            }
+
+  # ── 5. Trivy Vulnerability Scan + AI Triage ──────────────────────────────
+  trivy:
+    name: Trivy + AI Triage
+    runs-on: ubuntu-latest
+    needs: [setup]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'json'
+          output: 'trivy-report.json'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+
+      - name: Print findings table
+        if: always()
+        run: |
+          echo "=== Trivy Scan Results ==="
+          if [ -f trivy-report.json ]; then
+            jq -r '
+              .Results[]? | select(.Vulnerabilities) |
+              .Target as $t |
+              .Vulnerabilities[] |
+              "  [\(.Severity)] \(.VulnerabilityID)  \(.PkgName) \(.InstalledVersion) → \(.FixedVersion // "no fix")  (\($t))"
+            ' trivy-report.json || echo "No vulnerabilities found"
+          else
+            echo "trivy-report.json not found"
+          fi
+
+      - name: Upload Trivy report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-security-report
+          path: trivy-report.json
+          retention-days: 30
+
+      - name: AI triage of CRITICAL findings
+        id: triage
+        if: always()
+        env:
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+          PIPELINE_TRACE_ID:   ${{ needs.setup.outputs.trace_id }}
+          LANGFUSE_HOST:       ${{ vars.LANGFUSE_HOST }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+        run: |
+          CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' \
+            trivy-report.json 2>/dev/null || echo 0)
+
+          if [ "$CRITICAL" -eq 0 ]; then
+            echo "✅ No critical vulnerabilities"
+            echo "triage=✅ No critical vulnerabilities found" >> $GITHUB_OUTPUT
+            echo "verdict=ALLOW"                               >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          FINDINGS=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL") |
+            {id:.VulnerabilityID,pkg:.PkgName,installed:.InstalledVersion,
+             fixed:.FixedVersion,title:.Title}]' trivy-report.json)
+
+          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$(jq -n --argjson f "$FINDINGS" '{
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 900,
+              system: "Triage CVEs for a Kotlin/Spring Boot Maven API. For each CRITICAL CVE state: (1) exploitability in this context, (2) recommended action, (3) urgency. End with exactly: VERDICT: BLOCK  or  VERDICT: ALLOW",
+              messages: [{role:"user", content:("Triage:\n"+($f|tostring))}]
+            }')")
+          TRIAGE=$(echo "$RESPONSE" | jq -r '.content[0].text')
+
+          # Log generation to Langfuse under the pipeline trace
+          if [ -n "${LANGFUSE_PUBLIC_KEY:-}" ]; then
+            HOST="${LANGFUSE_HOST:-https://cloud.langfuse.com}"
+            INP=$(echo "$RESPONSE" | jq '.usage.input_tokens  // 0')
+            OUT=$(echo "$RESPONSE" | jq '.usage.output_tokens // 0')
+            curl -sf -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+              "$HOST/api/public/ingestion" \
+              -H "content-type: application/json" \
+              -d "$(jq -n \
+                --arg tid "$PIPELINE_TRACE_ID" --argjson inp "$INP" --argjson out "$OUT" \
+                --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{batch:[{type:"generation-create",id:("gen-"+$tid+"-trivy-triage"),timestamp:$ts,
+                  body:{traceId:$tid,name:"trivy-triage",model:"claude-haiku-4-5-20251001",
+                        usage:{input:$inp,output:$out}}}]}')" \
+              > /dev/null 2>&1 || true
+          fi
+
+          echo "$TRIAGE" >> $GITHUB_STEP_SUMMARY
+          echo "triage<<EOF" >> $GITHUB_OUTPUT
+          echo "$TRIAGE"    >> $GITHUB_OUTPUT
+          echo "EOF"        >> $GITHUB_OUTPUT
+
+          if echo "$TRIAGE" | grep -q "VERDICT: BLOCK"; then
+            echo "verdict=BLOCK" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "verdict=ALLOW" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post or update PR comment
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const triage  = ${{ toJSON(steps.triage.outputs.triage) }};
+            const verdict = "${{ steps.triage.outputs.verdict }}";
+            const icon    = verdict === "BLOCK" ? "🚨" : verdict === "ALLOW" ? "✅" : "ℹ️";
+            const body    = `## ${icon} Security Scan (Trivy)\n\n${triage}\n\n---\n*Trivy · Claude Haiku*`;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+            const existing = comments.find(c => c.body.includes('Security Scan (Trivy)'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body
+              });
+            }
+
+  # ── 6. Gitleaks Secret Detection ─────────────────────────────────────────
+  gitleaks:
+    name: Gitleaks Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── 7. Changelog (push to main only) ─────────────────────────────────────
+  changelog:
+    name: Generate Changelog
+    runs-on: ubuntu-latest
+    #if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request' && always()
+    needs: [setup, build]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine tag range
+        id: tags
+        run: |
+          LATEST=$(git describe --tags --abbrev=0 HEAD   2>/dev/null || echo "HEAD")
+          PREV=$(git describe   --tags --abbrev=0 "${LATEST}^" 2>/dev/null \
+                 || git rev-list --max-parents=0 HEAD)
+          echo "from=$PREV"   >> $GITHUB_OUTPUT
+          echo "to=$LATEST"   >> $GITHUB_OUTPUT
+          echo "Range: $PREV → $LATEST"
+
+      - name: Generate AI changelog via Claude Haiku
+        id: changelog
+        env:
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+          PIPELINE_TRACE_ID:   ${{ needs.setup.outputs.trace_id }}
+          LANGFUSE_HOST:       ${{ vars.LANGFUSE_HOST }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+        run: |
+          FROM="${{ steps.tags.outputs.from }}"
+          TO="${{ steps.tags.outputs.to }}"
+          COMMITS=$(git log "${FROM}..${TO}" --pretty=format:"%s%n%b" --no-merges \
+                    | head -c 8000)
+
+          if [ -z "$COMMITS" ]; then
+            echo "No commits to summarise between $FROM and $TO"
+            echo "generated=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Write to a temp file — avoids markdown content being corrupted
+          # when passed through $GITHUB_OUTPUT and re-interpolated as a shell expression.
+          CHANGELOG_FILE="/tmp/new-changelog.md"
+
+          CL_RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+                --arg commits "$COMMITS" \
+                --arg from    "$FROM" \
+                --arg to      "$TO" \
+                '{
+                  model: "claude-haiku-4-5-20251001",
+                  max_tokens: 1000,
+                  system: "Write CHANGELOG.md sections from conventional commits. Group by type (Added/Changed/Fixed/Removed/Security/Performance). Bold BREAKING CHANGE footers. Use Keep a Changelog format. Be concise and user-focused.",
+                  messages: [{role:"user", content:("Release "+$to+" from "+$from+":\n\n"+$commits)}]
+                }')")
+          echo "$CL_RESPONSE" | jq -r '.content[0].text' > "$CHANGELOG_FILE"
+
+          # Log generation to Langfuse under the pipeline trace
+          if [ -n "${LANGFUSE_PUBLIC_KEY:-}" ]; then
+            HOST="${LANGFUSE_HOST:-https://cloud.langfuse.com}"
+            INP=$(echo "$CL_RESPONSE" | jq '.usage.input_tokens  // 0')
+            OUT=$(echo "$CL_RESPONSE" | jq '.usage.output_tokens // 0')
+            curl -sf -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+              "$HOST/api/public/ingestion" \
+              -H "content-type: application/json" \
+              -d "$(jq -n \
+                --arg tid "$PIPELINE_TRACE_ID" --argjson inp "$INP" --argjson out "$OUT" \
+                --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{batch:[{type:"generation-create",id:("gen-"+$tid+"-changelog"),timestamp:$ts,
+                  body:{traceId:$tid,name:"changelog",model:"claude-haiku-4-5-20251001",
+                        usage:{input:$inp,output:$out}}}]}')" \
+              > /dev/null 2>&1 || true
+          fi
+
+          # Surface in Step Summary (safe — written directly from the file)
+          cat "$CHANGELOG_FILE" >> $GITHUB_STEP_SUMMARY
+
+          echo "generated=true"          >> $GITHUB_OUTPUT
+          echo "file=$CHANGELOG_FILE"    >> $GITHUB_OUTPUT
+
+      - name: Upload changelog artifact
+        if: steps.changelog.outputs.generated == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-changelog
+          path: /tmp/new-changelog.md
+          retention-days: 1
+
+      - name: Commit updated CHANGELOG.md
+        if: steps.changelog.outputs.generated == 'true'
+        run: |
+          CHANGELOG_FILE="${{ steps.changelog.outputs.file }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Read directly from the file — no shell interpolation of markdown content
+          if [ -f CHANGELOG.md ] && grep -q "^# Changelog" CHANGELOG.md; then
+            NEW_CONTENT_FILE="$CHANGELOG_FILE" \
+            awk '
+              BEGIN { inserted = 0 }
+              !inserted && /^## \[/ {
+                print ""
+                while ((getline line < ENVIRON["NEW_CONTENT_FILE"]) > 0) print line
+                close(ENVIRON["NEW_CONTENT_FILE"])
+                print ""
+                inserted = 1
+              }
+              { print }
+            ' CHANGELOG.md > /tmp/cl.tmp && mv /tmp/cl.tmp CHANGELOG.md
+          else
+            printf "# Changelog\n\n" > CHANGELOG.md
+            cat "$CHANGELOG_FILE"   >> CHANGELOG.md
+          fi
+
+          git add CHANGELOG.md
+          git diff --cached --quiet || \
+            git commit -m "chore(changelog): update for ${{ steps.tags.outputs.to }} [skip ci]"
+          # Push to the PR branch explicitly — Actions checks out a detached HEAD
+          # (the merge commit), so a plain `git push` has no tracking branch.
+          git push origin "HEAD:${{ github.head_ref }}"
+
+  # ── 8. AI Cost Report (Langfuse) ─────────────────────────────────────────
+  ai-cost-report:
+    name: AI Cost Report (Langfuse)
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [lint, test, build]
+    steps:
+      - name: Query Langfuse and report cost
+        env:
+          # Set LANGFUSE_HOST to https://cloud.langfuse.com for cloud, or leave
+          # empty to skip (local Langfuse is not reachable from GitHub runners).
+          LANGFUSE_HOST:       ${{ vars.LANGFUSE_HOST }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+        run: |
+          if [ -z "${LANGFUSE_PUBLIC_KEY:-}" ] || [ -z "${LANGFUSE_SECRET_KEY:-}" ]; then
+            echo "⚠️  LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY not configured – skipping"
+            exit 0
+          fi
+
+          HOST="${LANGFUSE_HOST:-https://cloud.langfuse.com}"
+
+          RESP=$(curl -sf -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+            "$HOST/api/public/observations?type=GENERATION&limit=100&page=1" 2>/dev/null) || {
+            echo "⚠️  Cannot reach Langfuse at $HOST – skipping cost report"
+            exit 0
+          }
+
+          COUNT=$(echo "$RESP" | jq '.data | length')
+          echo "## 💰 AI Cost Report (last $COUNT observations)" >> $GITHUB_STEP_SUMMARY
+          echo ""                                                 >> $GITHUB_STEP_SUMMARY
+          echo "| Model | Calls | Input tok | Output tok | Cost (USD) |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|------:|----------:|-----------:|------------|"  >> $GITHUB_STEP_SUMMARY
+
+          echo "$RESP" | jq -r '
+            .data |
+            group_by(.model) |
+            map({
+              model:  (.[0].model // "unknown"),
+              calls:  length,
+              input:  ([.[].usage.input  // 0] | add),
+              output: ([.[].usage.output // 0] | add),
+              cost:   ([.[].calculatedTotalCost // 0] | add)
+            }) |
+            sort_by(-.cost) |
+            .[] |
+            "| \(.model) | \(.calls) | \(.input) | \(.output) | $\(.cost * 100000 | round / 100000) |"
+          ' >> $GITHUB_STEP_SUMMARY
+
+          TOTAL=$(echo "$RESP" | jq '[.data[].calculatedTotalCost // 0] | add // 0')
+          echo ""                                                        >> $GITHUB_STEP_SUMMARY
+          echo "**Total (last 100 observations): \$${TOTAL}**"          >> $GITHUB_STEP_SUMMARY

@@ -1,7 +1,23 @@
-import { array, MCPServer, object } from 'mcp-use/server';
-import { z } from 'zod';
+import {MCPServer, object} from 'mcp-use/server';
+import {z} from 'zod';
+
 
 const API_BASE = process.env.API_BASE_URL ?? 'http://localhost:8080';
+
+// CreateDogProfileRequest (Kotlin) mirrored in Zod.
+// Note: size/gender are enum values in backend; keep as non-empty strings
+// unless you want to hardcode enum literals.
+const createDogProfileRequestSchema = z
+    .object({
+        name: z.string().trim().min(1).max(100),
+        breed: z.string().trim().min(1).max(100),
+        size: z.string().trim().min(1),
+        age: z.number().int().min(0).max(30),
+        gender: z.string().trim().min(1),
+        bio: z.string().max(500).optional(),
+    })
+    .strict();
+
 
 // Helper: typed fetch wrapper for the Spring Boot REST API
 async function apiCall<T>(
@@ -11,7 +27,7 @@ async function apiCall<T>(
 ): Promise<T> {
     const res = await fetch(`${API_BASE}${path}`, {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: {'Content-Type': 'application/json'},
         body: body ? JSON.stringify(body) : undefined,
     });
     if (!res.ok) {
@@ -31,20 +47,30 @@ const server = new MCPServer({
 server.tool(
     {
         name: 'create_dog_profile',
-        description: `Creates a new dog profile in the Tinder for Dogs platform.
-        Use this tool when the user wants to register, add, or create a new dog.
-        Returns the created profile including the assigned dog ID.`,
+        description:
+            'Create a new dog profile by calling POST /api/v1/dogs. ' +
+            'Input must match CreateDogProfileRequest (required fields only, validated by backend). ' +
+            'Returns the created DogProfileResponse on success (HTTP 201). ',
         schema: z.object({
-            name: z.string().min(1).max(100).describe('Dog\'s name'),
-            breed: z.string().min(1).max(100).describe('Dog\'s breed (e.g. Labrador, Poodle)'),
-            size: z.enum([ 'SMALL', 'MEDIUM', 'LARGE', 'EXTRA-LARGE' ]).describe('Dog\'s size category'),
-            age: z.number().int().min(0).max(30).describe('Dog\'s age in years'),
-            gender: z.enum([ 'MALE', 'FEMALE' ]).describe('Dog\'s gender'),
-            bio: z.string().max(500).optional().describe('Dog\'s bio (max characters)'),
+            request: createDogProfileRequestSchema.describe('CreateDogProfileRequest payload'),
         }),
     },
-    async ({ name, breed, size, age, gender, bio }) => {
-        return object(await apiCall('POST', '/api/v1/dogs', { name, breed, size, age, gender, bio }));
+    async (request) => {
+        try {
+            const createdDogProfile = await apiCall<unknown>('POST', '/api/v1/dogs', request.request);
+
+            return object({
+                success: true,
+                endpoint: 'POST /api/v1/dogs',
+                data: createdDogProfile,
+            });
+        } catch (err) {
+            return object({
+                success: false,
+                endpoint: 'POST /api/v1/dogs',
+                error: err instanceof Error ? err.message : 'Unknown error',
+            });
+        }
     },
 );
 
@@ -52,20 +78,44 @@ server.tool(
 server.tool(
     {
         name: 'get_best_match',
-        description: `Returns the best compatibility matches for a given dog.
-        Use this when the user asks who their dog should meet, which dog is most
-        compatible, or wants match recommendations for a specific dog ID.
-        Returns the top matching dog profiles with a compatibility score.`,
+        description:
+            'Get the best matches for a dog by calling GET /api/v1/dogs/{dogId}/matches. ' +
+            'Requires a valid dogId UUID and accepts an optional limit from 1 to 10. ' +
+            'If limit is omitted, the backend uses the default value 1. ' +
+            'Returns a DogMatchListResponse on success. ' +
+            'Returns HTTP 404 with code DOG_NOT_FOUND if the dog does not exist. ' +
+            'Returns HTTP 400 with code VALIDATION_ERROR if dogId or limit are invalid.',
         schema: z.object({
-            dogId: z.string().describe('ID of the dog to find matches for'),
-            limit: z.number().int().min(1).max(10).default(1)
-                .describe('Maximum number of matches to return (default: 1)'),
+            dogId: z.string().uuid().describe('UUID of the dog to find matches for'),
+            limit: z
+                .coerce.number()
+                .int()
+                .min(1)
+                .max(10)
+                .optional()
+                .describe('Optional maximum number of matches to return, from 1 to 10. Defaults to 1'),
         }),
     },
-    async ({ dogId, limit }) => {
-        return object(await apiCall('GET', `/api/v1/dogs/${dogId}/matches?limit=${limit}`));
+    async ({dogId, limit}) => {
+        try {
+            const query = typeof limit === 'number' ? `?limit=${limit}` : '';
+            const matches = await apiCall<unknown>('GET', `/api/v1/dogs/${dogId}/matches${query}`);
+
+            return object({
+                success: true,
+                endpoint: 'GET /api/v1/dogs/{dogId}/matches',
+                data: matches,
+            });
+        } catch (err) {
+            return object({
+                success: false,
+                endpoint: 'GET /api/v1/dogs/{dogId}/matches',
+                error: err instanceof Error ? err.message : 'Unknown error',
+            });
+        }
     },
 );
+
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 console.log(`Server running on port ${PORT}`);
