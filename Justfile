@@ -7,7 +7,7 @@
 
 # LiteLLM configuration
 LITELLM_URL := "http://localhost:4000/chat/completions"
-LITELLM_KEY := env_var('LITELLM_MASTER_KEY')
+LITELLM_KEY := env_var_or_default('LITELLM_MASTER_KEY', 'disabled')
 
 # Project configuration
 PROJECT_NAME := "tinder-for-dogs"
@@ -449,6 +449,26 @@ _changelog-generate from_tag to_tag:
 
     # Extract and output changelog content only
     echo "$RESPONSE" | jq -r '.choices[0].message.content'
+
+
+### HOMEWORK ###
+
+
+
+linting:
+    ktlint --format
+
+pipeline:
+    # linting
+    just linting 
+    # test
+    just test
+    # build
+    just build
+
+
+
+
 
 # Generate and append changelog to CHANGELOG.md file
 changelog-save from_tag="" to_tag="":

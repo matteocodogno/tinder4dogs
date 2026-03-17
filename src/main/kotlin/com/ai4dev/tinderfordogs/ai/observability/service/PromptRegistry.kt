@@ -90,20 +90,26 @@ class PromptRegistry(
         val cfg = config
 
         // Chat prompts: extract system + user template from messages array
-        val (systemPrompt, userTemplate) = if (type == "chat") {
-            @Suppress("UNCHECKED_CAST")
-            val messages = (prompt as List<ChatMessageWithPlaceholders>).mapNotNull { wrapper ->
-                wrapper.visit(object : ChatMessageWithPlaceholders.Visitor<ChatMessage?> {
-                    override fun visit(value: ChatMessage): ChatMessage = value
-                    override fun visit(value: com.langfuse.client.resources.prompts.types.PlaceholderMessage): ChatMessage? = null
-                })
+        val (systemPrompt, userTemplate) =
+            if (type == "chat") {
+                @Suppress("UNCHECKED_CAST")
+                val messages =
+                    (prompt as List<ChatMessageWithPlaceholders>).mapNotNull { wrapper ->
+                        wrapper.visit(
+                            object : ChatMessageWithPlaceholders.Visitor<ChatMessage?> {
+                                override fun visit(value: ChatMessage): ChatMessage = value
+
+                                override fun visit(value: com.langfuse.client.resources.prompts.types.PlaceholderMessage): ChatMessage? =
+                                    null
+                            },
+                        )
+                    }
+                val system = messages.firstOrNull { it.role == "system" }?.content ?: ""
+                val user = messages.firstOrNull { it.role == "user" }?.content ?: ""
+                system to user
+            } else {
+                "" to (prompt as? String ?: "")
             }
-            val system = messages.firstOrNull { it.role == "system" }?.content ?: ""
-            val user = messages.firstOrNull { it.role == "user" }?.content ?: ""
-            system to user
-        } else {
-            "" to (prompt as? String ?: "")
-        }
 
         return PromptTemplate(
             id = name,
