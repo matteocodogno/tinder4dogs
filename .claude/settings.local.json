@@ -1,8 +1,9 @@
 {
-    "permissions": {
-        "allow": [
-            "mcp__tinder-for-dogs-mcp__create_dog_profile",
-            "mcp__tinder-for-dogs-mcp__get_best_match"
-        ]
-    }
+  "permissions": {
+    "allow": [
+      "mcp__tinder-for-dogs-mcp__create_dog_profile",
+      "mcp__tinder-for-dogs-mcp__get_best_match",
+      "Bash(./mvnw test:*)"
+    ]
+  }
 }
