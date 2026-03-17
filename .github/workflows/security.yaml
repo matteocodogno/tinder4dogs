@@ -22,7 +22,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: just trivy-scan
-        continue-on-error: true
+        continue-on-error: false
 
       - name: Upload Trivy report
         if: always()
