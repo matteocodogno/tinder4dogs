@@ -7,7 +7,7 @@
 
 # LiteLLM configuration
 LITELLM_URL := "http://localhost:4000/chat/completions"
-LITELLM_KEY := env_var('LITELLM_MASTER_KEY')
+LITELLM_KEY := env_var_or_default('LITELLM_MASTER_KEY', 'disabled')
 
 # Project configuration
 PROJECT_NAME := "tinder-for-dogs"
