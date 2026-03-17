@@ -7,7 +7,7 @@ import kotlin.test.Ignore
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
-@Ignore ("Ignore test as there are not enough examples")
+@Ignore("Ignore test as there are not enough examples")
 class DatasetValidationTest {
     private val mapper = ObjectMapper()
 
