@@ -1,15 +1,15 @@
-name: Lint
+name: CI
 
 on:
   push:
     branches: [main]
     paths:
-      - 'src/**/*.kt'
+      - 'src/**'
       - 'pom.xml'
       - '.github/workflows/lint.yaml'
   pull_request:
     paths:
-      - 'src/**/*.kt'
+      - 'src/**'
       - 'pom.xml'
       - '.github/workflows/lint.yaml'
 
@@ -74,3 +74,43 @@ jobs:
               await github.rest.issues.updateComment(
                 { owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
             }
+
+  build:
+    needs: ktlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create stub .envrc for mise
+        run: touch .envrc
+
+      - name: Set up mise (Java, Maven, Kotlin)
+        uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - name: Set up just
+        uses: extractions/setup-just@v2
+
+      - name: Build
+        run: just build-fast
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create stub .envrc for mise
+        run: touch .envrc
+
+      - name: Set up mise (Java, Maven, Kotlin)
+        uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - name: Set up just
+        uses: extractions/setup-just@v2
+
+      - name: Run tests
+        run: just test
