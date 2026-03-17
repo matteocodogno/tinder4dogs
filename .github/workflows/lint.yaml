@@ -35,7 +35,8 @@ jobs:
         uses: extractions/setup-just@v2
 
       - name: Run lint
-        run: just lint 2>&1 | tee /tmp/lint-output.txt
+        shell: bash
+        run: set -o pipefail; just lint 2>&1 | tee /tmp/lint-output.txt
 
       - name: Post PR comment on failure
         if: failure() && github.event_name == 'pull_request'
