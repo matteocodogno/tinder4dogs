@@ -8,6 +8,24 @@ import com.ai4dev.tinderfordogs.ai.rag.service.MiniRagService
 import com.ai4dev.tinderfordogs.support.model.CompatibilityResponse
 import org.springframework.stereotype.Service
 
+/**
+ * Service responsible for generating AI-powered compatibility advice between two dog breeds
+ * within the Tinder for Dogs application.
+ *
+ * This service combines retrieval-augmented generation (RAG) with a language model to produce
+ * contextually grounded, behaviour-focused compatibility summaries. Given two breed names and
+ * a pre-built knowledge base index, it retrieves the most relevant knowledge chunks and
+ * instructs the language model to summarise compatibility risks, special considerations,
+ * and a practical first-meeting tip for the specific breed pair.
+ *
+ * The language model is constrained to use only the retrieved context when forming its response,
+ * ensuring that the generated advice stays grounded in the provided knowledge base rather than
+ * relying solely on the model's parametric knowledge.
+ *
+ * @param liteLLM The LiteLLM client used to send chat completion requests to the configured language model.
+ * @param ragService The RAG service used to embed the compatibility query and retrieve the most
+ * semantically relevant chunks from the knowledge base index.
+ */
 @Service
 class BreedCompatibilityService(
     private val liteLLM: LiteLLMService,
