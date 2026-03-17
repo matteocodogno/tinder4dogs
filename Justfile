@@ -1242,7 +1242,7 @@ lint:
     set -euo pipefail
     echo -e "{{ BLUE }}🔎 Linting Kotlin sources...{{ NC }}"
     if command -v ktlint &> /dev/null; then
-        ktlint 'src/**/*.kt' --reporter=plain
+        ktlint --format 'src/**/*.kt' --reporter=plain
         echo -e "{{ GREEN }}✅ Lint passed (ktlint){{ NC }}"
     else
         echo -e "{{ YELLOW }}⚠️  ktlint not found – falling back to Maven compile check{{ NC }}"
