@@ -7,7 +7,7 @@
 
 # LiteLLM configuration
 LITELLM_URL := "http://localhost:4000/chat/completions"
-LITELLM_KEY := env_var('LITELLM_MASTER_KEY')
+LITELLM_KEY := env_var_or_default('LITELLM_MASTER_KEY', 'disabled')
 
 # Project configuration
 PROJECT_NAME := "tinder-for-dogs"
@@ -143,6 +143,7 @@ check-tools:
     check_tool just
     check_tool direnv
     check_tool gitleaks
+    check_tool trivy
 
     # Optional but recommended
     if command -v infisical &> /dev/null || command -v op &> /dev/null; then
@@ -156,7 +157,7 @@ check-tools:
     if [ $MISSING -eq 1 ]; then
         echo -e "{{ RED }}❌ Some tools are missing. Please install them:{{ NC }}"
         echo ""
-        echo "  brew install mise docker git just direnv gitleaks"
+        echo "  brew install mise docker git just direnv gitleaks trivy"
         echo "  brew install infisical/get-cli/infisical  # or 1password-cli"
         exit 1
     fi
@@ -322,6 +323,18 @@ clean:
     @rm -rf target/
     @echo "{{ GREEN }}✅ Clean complete{{ NC }}"
 
+# Lint Kotlin sources with ktlint
+lint: check-mise
+    @echo "{{ BLUE }}🔎 Running ktlint check...{{ NC }}"
+    @./mvnw ktlint:check
+    @echo "{{ GREEN }}✅ Lint passed{{ NC }}"
+
+# Auto-fix ktlint violations
+lint-fix: check-mise
+    @echo "{{ YELLOW }}🔧 Running ktlint format...{{ NC }}"
+    @./mvnw ktlint:format
+    @echo "{{ GREEN }}✅ Lint fixes applied{{ NC }}"
+
 # Package JAR file
 package: check-mise
     @echo "{{ BLUE }}📦 Packaging application...{{ NC }}"
@@ -333,14 +346,15 @@ package: check-mise
 # ============================================
 
 # Internal: Call AI with specific role
+# - Locally:  routes to LiteLLM (requires LITELLM_MASTER_KEY + local stack)
+# - CI ($CI):  calls Anthropic API directly (requires ANTHROPIC_API_KEY)
+# System prompt auto-loaded from prompts/templates/<role>.md when present
 _call_ai role prompt_file *metadata:
     #!/usr/bin/env bash
     set -euo pipefail
 
     # Build metadata JSON from key=value pairs
     META='{"role": "{{role}}", "user": "'"$USER"'", "project": "{{PROJECT_NAME}}"'
-
-    # Add custom metadata
     for item in {{metadata}}; do
         KEY=$(echo "$item" | cut -d= -f1)
         VALUE=$(echo "$item" | cut -d= -f2-)
@@ -348,39 +362,230 @@ _call_ai role prompt_file *metadata:
     done
     META="$META}"
 
-    # Read prompt from file and escape for JSON
     PROMPT_CONTENT=$(cat "{{prompt_file}}")
 
-    # Build complete JSON payload using jq
-    JSON_PAYLOAD=$(jq -n \
-      --arg model "{{role}}" \
-      --arg content "$PROMPT_CONTENT" \
-      --argjson metadata "$META" \
-      '{
-        model: $model,
-        messages: [{role: "user", content: $content}],
-        metadata: $metadata
-      }')
+    # Load system prompt from prompts/templates/<role>.md if present
+    SYSTEM_PROMPT=""
+    SYSTEM_FILE="prompts/templates/{{role}}.md"
+    if [ -f "$SYSTEM_FILE" ]; then
+        SYSTEM_PROMPT=$(cat "$SYSTEM_FILE")
+    fi
 
-    # Call LiteLLM
-    RESPONSE=$(curl -s -X POST {{LITELLM_URL}} \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer {{LITELLM_KEY}}" \
-      -d "$JSON_PAYLOAD")
+    if [ -n "${CI:-}" ]; then
+        # ── CI: Anthropic API direct call ────────────────────────────────────
+        if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo -e "{{ RED }}❌ ANTHROPIC_API_KEY not set{{ NC }}" >&2
+            exit 1
+        fi
+        MODEL="${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}"
 
-    # Check for errors
-    if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
-        echo -e "{{ RED }}❌ API Error:{{ NC }}" >&2
-        echo "$RESPONSE" | jq '.error' >&2
+        JSON_PAYLOAD=$(jq -n \
+          --arg model "$MODEL" \
+          --arg system "$SYSTEM_PROMPT" \
+          --arg content "$PROMPT_CONTENT" \
+          '{
+            model: $model,
+            max_tokens: 1024,
+            messages: [{role: "user", content: $content}]
+          } + (if $system != "" then {system: $system} else {} end)')
+
+        RESPONSE=$(curl -s -X POST https://api.anthropic.com/v1/messages \
+          -H "x-api-key: $ANTHROPIC_API_KEY" \
+          -H "anthropic-version: 2023-06-01" \
+          -H "content-type: application/json" \
+          -d "$JSON_PAYLOAD")
+
+        if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+            echo -e "{{ RED }}❌ API Error:{{ NC }}" >&2
+            echo "$RESPONSE" | jq '.error' >&2
+            exit 1
+        fi
+
+        echo "$RESPONSE" | jq -r '.content[0].text'
+    else
+        # ── Local: LiteLLM ────────────────────────────────────────────────────
+        if [ -n "$SYSTEM_PROMPT" ]; then
+            MESSAGES=$(jq -n \
+              --arg sys "$SYSTEM_PROMPT" \
+              --arg user "$PROMPT_CONTENT" \
+              '[{role: "system", content: $sys}, {role: "user", content: $user}]')
+        else
+            MESSAGES=$(jq -n \
+              --arg user "$PROMPT_CONTENT" \
+              '[{role: "user", content: $user}]')
+        fi
+
+        JSON_PAYLOAD=$(jq -n \
+          --arg model "{{role}}" \
+          --argjson messages "$MESSAGES" \
+          --argjson metadata "$META" \
+          '{
+            model: $model,
+            messages: $messages,
+            metadata: $metadata
+          }')
+
+        RESPONSE=$(curl -s -X POST {{LITELLM_URL}} \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer {{LITELLM_KEY}}" \
+          -d "$JSON_PAYLOAD")
+
+        if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+            echo -e "{{ RED }}❌ API Error:{{ NC }}" >&2
+            echo "$RESPONSE" | jq '.error' >&2
+            exit 1
+        fi
+
+        echo "$RESPONSE" | jq -r '.choices[0].message.content'
+    fi
+
+# ============================================
+# ROLE: SECURITY
+# ============================================
+
+# Scan for secrets with gitleaks (full git history)
+secrets-scan:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🔑 Scanning for secrets with gitleaks...{{ NC }}"
+    gitleaks detect --source . --redact --verbose
+    echo -e "{{ GREEN }}✅ No secrets detected{{ NC }}"
+
+# Run Trivy filesystem scan → trivy-report.json
+security-scan:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🔍 Running Trivy security scan...{{ NC }}"
+    trivy fs \
+      --format json \
+      --output trivy-report.json \
+      --severity CRITICAL,HIGH \
+      --ignore-unfixed \
+      .
+    echo -e "{{ GREEN }}✅ Scan complete → trivy-report.json{{ NC }}"
+
+# Print human-readable findings from trivy-report.json
+security-report:
+    #!/usr/bin/env bash
+    if [ ! -f trivy-report.json ]; then
+        echo -e "{{ RED }}❌ trivy-report.json not found. Run: just security-scan{{ NC }}"
+        exit 1
+    fi
+    echo "=== Trivy Security Scan Results ==="
+    jq -r '.Results[]? | select(.Vulnerabilities) | "\n📦 Target: \(.Target)\nVulnerabilities found: \(.Vulnerabilities | length)\n" + (.Vulnerabilities[] | "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🔴 [\(.Severity)] \(.VulnerabilityID)\n📌 Package: \(.PkgName) (\(.InstalledVersion))\n✅ Fixed in: \(.FixedVersion // "Not available")\n📝 \(.Title)\n🔗 \(.PrimaryURL // "")\n")' trivy-report.json \
+      || echo "No vulnerabilities found"
+
+# AI triage of CRITICAL CVEs → trivy-triage.txt (exits 1 on VERDICT: BLOCK)
+security-triage:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -f trivy-report.json ]; then
+        echo -e "{{ RED }}❌ trivy-report.json not found. Run: just security-scan{{ NC }}"
         exit 1
     fi
 
-    # Extract and return content
-    echo "$RESPONSE" | jq -r '.choices[0].message.content'
+    CRITICAL=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-report.json)
+    if [ "$CRITICAL" -eq "0" ]; then
+        echo -e "{{ GREEN }}✅ No critical vulnerabilities found{{ NC }}"
+        echo "✅ No critical vulnerabilities found" > trivy-triage.txt
+        exit 0
+    fi
+
+    echo -e "{{ YELLOW }}⚠️  Found $CRITICAL CRITICAL CVEs — running AI triage...{{ NC }}"
+
+    FINDINGS=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL") | {id:.VulnerabilityID,pkg:.PkgName,installed:.InstalledVersion,fixed:.FixedVersion,title:.Title}]' trivy-report.json)
+
+    PROMPT_FILE=$(mktemp)
+    trap 'rm -f "$PROMPT_FILE"' EXIT
+    printf 'Triage:\n%s' "$FINDINGS" > "$PROMPT_FILE"
+
+    TRIAGE=$(just _call_ai security "$PROMPT_FILE")
+
+    echo "$TRIAGE"
+    echo "$TRIAGE" > trivy-triage.txt
+
+    if echo "$TRIAGE" | grep -q "VERDICT: BLOCK"; then
+        echo -e "{{ RED }}🚨 VERDICT: BLOCK — critical vulnerabilities require immediate action{{ NC }}"
+        exit 1
+    fi
+    echo -e "{{ GREEN }}✅ VERDICT: ALLOW{{ NC }}"
+
+# Full security check: scan → report → AI triage
+security: security-scan security-report security-triage
 
 # ============================================
 # ROLE: CHANGELOG (Release Notes)
 # ============================================
+
+# Generate changelog for PR commits and prepend to CHANGELOG.md (base defaults to main)
+changelog-pr base="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Find merge base with the target branch (works with or without remote)
+    MERGE_BASE=$(git merge-base HEAD "origin/{{base}}" 2>/dev/null \
+        || git merge-base HEAD "{{base}}" 2>/dev/null \
+        || echo "")
+
+    if [ -z "$MERGE_BASE" ]; then
+        echo -e "{{ RED }}❌ Could not find merge base with {{base}}{{ NC }}"
+        exit 1
+    fi
+
+    COMMITS=$(git log "${MERGE_BASE}..HEAD" --pretty=format:"%s%n%b" --no-merges 2>&1)
+
+    if [ -z "$COMMITS" ]; then
+        echo -e "{{ YELLOW }}⚠️  No commits found since branching from {{base}}{{ NC }}"
+        exit 0
+    fi
+
+    echo -e "{{ BLUE }}📝 Generating PR changelog ($(echo "$COMMITS" | grep -c '^' || true) lines of commits)...{{ NC }}"
+
+    PROMPT_FILE=$(mktemp)
+    trap 'rm -f "$PROMPT_FILE"' EXIT
+    printf 'PR commits:\n\n%s' "$COMMITS" > "$PROMPT_FILE"
+
+    CHANGELOG=$(just _call_ai changelog "$PROMPT_FILE")
+
+    if [ -z "$CHANGELOG" ]; then
+        echo -e "{{ RED }}❌ Failed to generate changelog{{ NC }}"
+        exit 1
+    fi
+
+    TEMP_FILE=$(mktemp)
+
+    if [ -f "CHANGELOG.md" ]; then
+        if grep -q "^# Changelog" CHANGELOG.md; then
+            awk -v new="$CHANGELOG" '
+                /^# Changelog/ {
+                    print
+                    if (getline > 0) print
+                    print ""
+                    print new
+                    print ""
+                    next
+                }
+                { print }
+            ' CHANGELOG.md > "$TEMP_FILE"
+        else
+            { echo "$CHANGELOG"; echo ""; cat CHANGELOG.md; } > "$TEMP_FILE"
+        fi
+    else
+        {
+            echo "# Changelog"
+            echo ""
+            echo "All notable changes to this project will be documented in this file."
+            echo ""
+            echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),"
+            echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)."
+            echo ""
+            echo "$CHANGELOG"
+        } > "$TEMP_FILE"
+    fi
+
+    mv "$TEMP_FILE" CHANGELOG.md
+    echo -e "{{ GREEN }}✅ CHANGELOG.md updated{{ NC }}"
+
 # Internal: Generate changelog content only (no status messages)
 _changelog-generate from_tag to_tag:
     #!/usr/bin/env bash
@@ -408,47 +613,14 @@ _changelog-generate from_tag to_tag:
         exit 0
     fi
 
-    # Build JSON payload using jq
-    JSON_PAYLOAD=$(jq -n \
-      --arg commits "$COMMITS" \
-      --arg from "$FROM_TAG" \
-      --arg to "$TO_TAG" \
-      '{
-        model: "ci-summarizer",
-        max_tokens: 1000,
-        messages: [
-          {
-            role: "system",
-            content: "Write CHANGELOG.md sections from conventional commits. Group by type (feat, fix, chore, refactor, test, docs, ci, perf). Flag BREAKING CHANGE footers in bold. Use Keep a Changelog format (https://keepachangelog.com). Be concise and user-focused."
-          },
-          {
-            role: "user",
-            content: ("Release " + $to + " from " + $from + ":\n\n" + $commits)
-          }
-        ],
-        metadata: {
-          tags: ["ci", "changelog"],
-          from_tag: $from,
-          to_tag: $to,
-          project: "{{PROJECT_NAME}}"
-        }
-      }')
+    PROMPT_FILE=$(mktemp)
+    trap 'rm -f "$PROMPT_FILE"' EXIT
+    printf 'Release %s from %s:\n\n%s' "$TO_TAG" "$FROM_TAG" "$COMMITS" > "$PROMPT_FILE"
 
-    # Call LiteLLM
-    RESPONSE=$(curl -s -X POST {{LITELLM_URL}} \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer {{LITELLM_KEY}}" \
-      -d "$JSON_PAYLOAD")
-
-    # Check for errors
-    if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
-        echo -e "{{ RED }}❌ API Error:{{ NC }}" >&2
-        echo "$RESPONSE" | jq '.error' >&2
-        exit 1
-    fi
-
-    # Extract and output changelog content only
-    echo "$RESPONSE" | jq -r '.choices[0].message.content'
+    just _call_ai ci-summarizer "$PROMPT_FILE" \
+      tags=ci,changelog \
+      from_tag="$FROM_TAG" \
+      to_tag="$TO_TAG"
 
 # Generate and append changelog to CHANGELOG.md file
 changelog-save from_tag="" to_tag="":
