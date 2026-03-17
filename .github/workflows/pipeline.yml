@@ -1,0 +1,26 @@
+name: Baseline pipeline
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Just
+        uses: extractions/setup-just@v2
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Run linting
+        run: just linting

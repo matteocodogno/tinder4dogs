@@ -450,6 +450,26 @@ _changelog-generate from_tag to_tag:
     # Extract and output changelog content only
     echo "$RESPONSE" | jq -r '.choices[0].message.content'
 
+
+### HOMEWORK ###
+
+
+
+linting:
+    ktlint --format
+
+pipeline:
+    # linting
+    just linting 
+    # test
+    just test
+    # build
+    just build
+
+
+
+
+
 # Generate and append changelog to CHANGELOG.md file
 changelog-save from_tag="" to_tag="":
     #!/usr/bin/env bash
