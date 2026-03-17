@@ -1127,3 +1127,24 @@ gen-tests file:
 #    @echo -e "{{ YELLOW }}🧹 Cleaning Docker volumes...{{ NC }}"
 #    @cd ~/.ai && docker-compose down -v
 #    @echo -e "{{ GREEN }}✅ Everything cleaned{{ NC }}"
+
+# ============================================
+# Code Quality
+# ============================================
+
+# Run ktlint to check Kotlin code style
+lint: check-mise
+    @echo "{{ BLUE }}🔍 Running ktlint...{{ NC }}"
+    @./mvnw ktlint:check
+    @echo "{{ GREEN }}✅ Lint check complete{{ NC }}"
+
+# Auto-format Kotlin code with ktlint
+lint-format: check-mise
+    @echo "{{ BLUE }}✨ Formatting Kotlin code...{{ NC }}"
+    @./mvnw ktlint:format
+    @echo "{{ GREEN }}✅ Code formatted{{ NC }}"
+
+# ============================================
+# Course excercise
+# ============================================
+
