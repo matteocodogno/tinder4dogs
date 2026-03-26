@@ -1,0 +1,317 @@
+# Justfile for Tinder for Dogs
+# Includes: Infrastructure, mise, project mgmt, and AI commands
+
+# ============================================
+# Configuration
+# ============================================
+
+# LiteLLM configuration
+LITELLM_URL := "http://localhost:4000/chat/completions"
+LITELLM_KEY := env_var('LITELLM_MASTER_KEY')
+
+# Project configuration
+PROJECT_NAME := "tinder-for-dogs"
+LANGFUSE_PROJECT := env_var_or_default('LANGFUSE_PROJECT', 'whysoserious')
+
+# Colors for output
+RED := '\033[0;31m'
+GREEN := '\033[0;32m'
+YELLOW := '\033[1;33m'
+BLUE := '\033[0;34m'
+NC := '\033[0m' # No Color
+
+# ============================================
+# Help & Documentation
+# ============================================
+
+# Show this help
+default:
+    @just --list --unsorted
+
+# Show detailed help with examples
+help:
+    @echo "{{ GREEN }}Tinder for Dogs - AI4Dev Course{{ NC }}"
+    @echo ""
+    @echo "{{ BLUE }}Infrastructure:{{ NC }}"
+    @echo "  just ai-start           - Start all AI services (LiteLLM, Langfuse, etc.)"
+    @echo "  just ai-stop            - Stop all AI services"
+    @echo "  just ai-status          - Check service health"
+    @echo "  just ai-logs [service]  - View logs"
+    @echo ""
+    @echo "{{ BLUE }}Environment:{{ NC }}"
+    @echo "  just check-tools        - Verify mise and all required tools"
+    @echo "  just check-env          - Verify environment variables"
+    @echo "  just setup              - Complete initial setup"
+    @echo ""
+    @echo "{{ BLUE }}Project:{{ NC }}"
+    @echo "  just build              - Build the project"
+    @echo "  just run                - Run Spring Boot app"
+    @echo "  just test               - Run tests"
+    @echo "  just clean              - Clean build artifacts"
+
+# ============================================
+# Infrastructure Management
+# ============================================
+
+# Start global AI infrastructure
+ai-start:
+    @ai start
+
+# Stop global AI infrastructure
+ai-stop:
+    @ai stop
+
+# Restart all or specific service
+ai-restart service="":
+    #!/usr/bin/env bash
+    if [ -z "{{service}}" ]; then
+        echo -e "{{ YELLOW }}♻️  Restarting all services...{{ NC }}"
+        ai restart
+    else
+        echo -e "{{ YELLOW }}♻️  Restarting {{service}}...{{ NC }}"
+        ai restart {{service}}
+    fi
+
+# Check AI infrastructure status
+ai-status:
+    #!/usr/bin/env bash
+    echo -e "{{ BLUE }}📊 AI Infrastructure Status:{{ NC }}"
+    echo ""
+    ai status
+    echo ""
+
+# View logs for a service
+ai-logs service="litellm":
+    @echo "{{ BLUE }}📋 Logs for {{service}}:{{ NC }}"
+    @ai logs {{service}}
+
+# Test LiteLLM connection
+ai-test:
+    #!/usr/bin/env bash
+    echo -e "{{ BLUE }}🧪 Testing LiteLLM connection...{{ NC }}"
+    ai test
+
+# Show AI usage costs by role
+ai-costs:
+    #!/usr/bin/env bash
+    echo -e "{{ BLUE }}💰 AI Usage Costs by Role:{{ NC }}"
+    echo ""
+    ai cost
+
+# Reset all AI infrastructure (delete data)
+ai-reset:
+    @ai reset
+
+# ============================================
+# Environment & Tool Management (mise)
+# ============================================
+
+# Check if all required tools are installed
+check-tools:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🔍 Checking required tools...{{ NC }}"
+    echo ""
+
+    MISSING=0
+
+    check_tool() {
+        if command -v $1 &> /dev/null; then
+            echo -e "  {{ GREEN }}✅{{ NC }} $1"
+        else
+            echo -e "  {{ RED }}❌{{ NC }} $1 (not found)"
+            MISSING=1
+        fi
+    }
+
+    # Essential tools
+    check_tool mise
+    check_tool docker
+    check_tool git
+    check_tool just
+    check_tool direnv
+    check_tool gitleaks
+
+    # Optional but recommended
+    if command -v infisical &> /dev/null || command -v op &> /dev/null; then
+        echo -e "  {{ GREEN }}✅{{ NC }} secret manager (infisical or 1password)"
+    else
+        echo -e "  {{ YELLOW }}⚠️{{ NC }}  secret manager (install infisical or 1password CLI)"
+    fi
+
+    echo ""
+
+    if [ $MISSING -eq 1 ]; then
+        echo -e "{{ RED }}❌ Some tools are missing. Please install them:{{ NC }}"
+        echo ""
+        echo "  brew install mise docker git just direnv gitleaks"
+        echo "  brew install infisical/get-cli/infisical  # or 1password-cli"
+        exit 1
+    fi
+
+    echo -e "{{ GREEN }}✅ All required tools installed{{ NC }}"
+    echo ""
+
+    # Check mise tools
+    echo -e "{{ BLUE }}📦 mise-managed tools:{{ NC }}"
+    mise current || echo -e "{{ YELLOW }}⚠️  Not in a mise-managed directory{{ NC }}"
+
+## Verify mise activation
+check-mise:
+    #!/usr/bin/env bash
+    if ! command -v mise &> /dev/null; then
+        echo -e "{{ RED }}❌ mise not found. Install with: brew install mise{{ NC }}"
+        exit 1
+    fi
+
+    if ! mise current &> /dev/null; then
+        echo -e "{{ YELLOW }}⚠️  mise not activated in this directory{{ NC }}"
+        echo "Run: cd . (to trigger mise activation)"
+        exit 1
+    fi
+
+    echo -e "{{ GREEN }}✅ mise is active{{ NC }}"
+
+## Check environment variables
+check-env:
+    #!/usr/bin/env bash
+    echo -e "{{ BLUE }}🔐 Checking environment variables...{{ NC }}"
+    echo ""
+
+    check_var() {
+        if [ -z "${!1:-}" ]; then
+            echo -e "  {{ RED }}❌{{ NC }} $1 (not set)"
+            return 1
+        else
+            echo -e "  {{ GREEN }}✅{{ NC }} $1"
+            return 0
+        fi
+    }
+
+    MISSING=0
+
+    # Required variables
+    check_var LITELLM_MASTER_KEY || MISSING=1
+    check_var OPENAI_API_KEY || MISSING=1
+    check_var ANTHROPIC_API_KEY || MISSING=1
+    check_var LANGFUSE_PUBLIC_KEY || MISSING=1
+    check_var LANGFUSE_SECRET_KEY || MISSING=1
+
+    # Optional
+    check_var GEMINI_API_KEY || echo -e "  {{ YELLOW }}⚠️{{ NC }}  GEMINI_API_KEY (optional)"
+
+    echo ""
+
+    if [ $MISSING -eq 1 ]; then
+        echo "{{ RED }}❌ Some environment variables are missing{{ NC }}"
+        echo ""
+        echo "Make sure:"
+        echo "  1. direnv is installed and configured"
+        echo "  2. .envrc exists and is allowed (run: direnv allow .)"
+        echo "  3. Secrets are loaded from Infisical or 1Password"
+        exit 1
+    fi
+
+    echo -e "{{ GREEN }}✅ All required environment variables are set{{ NC }}"
+
+## Install mise tools for this project
+mise-install:
+    @echo "{{ BLUE }}📦 Installing mise tools...{{ NC }}"
+    @mise install
+    @echo "{{ GREEN }}✅ Tools installed{{ NC }}"
+
+# Show current mise versions
+mise-versions:
+    @echo "{{ BLUE }}📦 Current tool versions:{{ NC }}"
+    @mise current
+
+# Update mise tools
+mise-update:
+    @echo "{{ BLUE }}📦 Updating mise tools...{{ NC }}"
+    @mise upgrade
+    @echo "{{ GREEN }}✅ Tools updated{{ NC }}"
+
+# ============================================
+# Project Management
+# ============================================
+
+# Complete initial setup
+setup: check-tools check-env
+    #!/usr/bin/env bash
+    echo -e "{{ GREEN }}🚀 Setting up Tinder for Dogs project...{{ NC }}"
+    echo ""
+
+    # Start AI infrastructure
+    just ai-start
+
+    # Install mise tools if needed
+    if ! mise current &> /dev/null; then
+        just mise-install
+    fi
+
+    # Create directories
+    mkdir -p reviews docs/architecture docs/api
+
+    # Build project
+    echo -e "{{ BLUE }}📦 Building project...{{ NC }}"
+    ./mvnw clean install
+
+    echo ""
+    echo -e "{{ GREEN }}✅ Setup complete!{{ NC }}"
+    echo ""
+    echo -e "{{ BLUE }}Next steps:{{ NC }}"
+    echo "  1. Run the app:     just run"
+    echo "  2. Run tests:       just test"
+    echo "  3. View Langfuse:   just langfuse"
+    echo "  4. Try AI:          just review src/main/kotlin/..."
+
+# Build the project
+build: check-mise
+    @echo "{{ BLUE }}🔨 Building project...{{ NC }}"
+    @./mvnw clean install
+    @echo "{{ GREEN }}✅ Build complete{{ NC }}"
+
+# Build without tests (faster)
+build-fast: check-mise
+    @echo "{{ BLUE }}🔨 Building project (skip tests)...{{ NC }}"
+    @./mvnw clean install -DskipTests
+    @echo "{{ GREEN }}✅ Build complete{{ NC }}"
+
+# Run Spring Boot application
+run: check-mise
+    @echo "{{ BLUE }}🚀 Starting Tinder for Dogs...{{ NC }}"
+    @./mvnw spring-boot:run
+
+# Run in development mode (with auto-reload)
+dev: check-mise
+    @echo "{{ BLUE }}🔄 Starting in dev mode (auto-reload)...{{ NC }}"
+    @./mvnw spring-boot:run -Dspring-boot.run.jvmArguments="-Dspring.devtools.restart.enabled=true"
+
+# Run all tests
+test: check-mise
+    @echo "{{ BLUE }}🧪 Running tests...{{ NC }}"
+    @./mvnw test
+
+# Run specific test class
+test-class class: check-mise
+    @echo -e "{{ BLUE }}🧪 Running test: {{class}}{{ NC }}"
+    @./mvnw test -Dtest={{class}}
+
+# Run tests with coverage
+test-coverage: check-mise
+    @echo "{{ BLUE }}🧪 Running tests with coverage...{{ NC }}"
+    @./mvnw verify
+    @echo "{{ GREEN }}✅ Coverage report: target/site/jacoco/index.html{{ NC }}"
+
+# Clean build artifacts
+clean:
+    @echo "{{ YELLOW }}🧹 Cleaning build artifacts...{{ NC }}"
+    @./mvnw clean
+    @rm -rf target/
+    @echo "{{ GREEN }}✅ Clean complete{{ NC }}"
+
+# Package JAR file
+package: check-mise
+    @echo "{{ BLUE }}📦 Packaging application...{{ NC }}"
+    @./mvnw clean package -DskipTests
+    @echo "{{ GREEN }}✅ JAR created: target/{{PROJECT_NAME}}.jar{{ NC }}"
