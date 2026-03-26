@@ -10,6 +10,7 @@ private val logger = KotlinLogging.logger {}
 class FineTuningPipelineService(
     private val loader: RawDataLoader,
     private val cleaner: DataCleaner,
+    private val augmentor: DataAugmentor,
 ) {
     suspend fun run(submitJob: Boolean = false): FineTuningJob? {
         logger.info { "🚀 Starting fine-tuning pipeline for Tinder for Dogs..." }
@@ -22,6 +23,14 @@ class FineTuningPipelineService(
         // 2. Clean
         val (cleaned, report) = cleaner.clean(raw)
         logger.info { "🧹 Cleaning report: $report" }
+
+        // 3. Augment
+        val augmented = augmentor.augment(cleaned, variantsPerExample = 10)
+        logger.info { "🔧 Augmented to ${augmented.size} examples" }
+
+        // 4. Clean again (augmented data may have issues)
+        val (finalExamples, _) = cleaner.clean(augmented)
+        logger.info { "✅ Final clean dataset: ${finalExamples.size} examples" }
 
         return null
     }
