@@ -315,3 +315,107 @@ package: check-mise
     @echo "{{ BLUE }}📦 Packaging application...{{ NC }}"
     @./mvnw clean package -DskipTests
     @echo "{{ GREEN }}✅ JAR created: target/{{PROJECT_NAME}}.jar{{ NC }}"
+
+
+# ============================================
+# Helper: Call AI with role
+# ============================================
+
+# Internal: Call AI with specific role
+_call_ai role prompt_file *metadata:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Build metadata JSON from key=value pairs
+    META='{"role": "{{role}}", "user": "'"$USER"'", "project": "{{PROJECT_NAME}}"'
+
+    # Add custom metadata
+    for item in {{metadata}}; do
+        KEY=$(echo "$item" | cut -d= -f1)
+        VALUE=$(echo "$item" | cut -d= -f2-)
+        META="$META, \"$KEY\": \"$VALUE\""
+    done
+    META="$META}"
+
+    # Read prompt from file and escape for JSON
+    PROMPT_CONTENT=$(cat "{{prompt_file}}")
+
+    # Build complete JSON payload using jq
+    JSON_PAYLOAD=$(jq -n \
+      --arg model "{{role}}" \
+      --arg content "$PROMPT_CONTENT" \
+      --argjson metadata "$META" \
+      '{
+        model: $model,
+        messages: [{role: "user", content: $content}],
+        metadata: $metadata
+      }')
+
+    # Call LiteLLM
+    RESPONSE=$(curl -s -X POST {{LITELLM_URL}} \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer {{LITELLM_KEY}}" \
+      -d "$JSON_PAYLOAD")
+
+    # Check for errors
+    if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+        echo -e "{{ RED }}❌ API Error:{{ NC }}" >&2
+        echo "$RESPONSE" | jq '.error' >&2
+        exit 1
+    fi
+
+    # Extract and return content
+    echo "$RESPONSE" | jq -r '.choices[0].message.content'
+
+# ============================================
+# ROLE: COMMITTER (Commit Messages)
+# ============================================
+
+# Generate conventional commit message
+commit-msg:
+    #!/usr/bin/env bash
+    DIFF=$(git diff --staged)
+
+    if [ -z "$DIFF" ]; then
+      echo "❌ No staged changes"
+      exit 1
+    fi
+
+    TEMPLATE=$(cat prompts/templates/commit_message.md)
+
+    DIFF_FILE=$(mktemp)
+    PROMPT_FILE=$(mktemp)
+    trap 'rm -f "$DIFF_FILE" "$PROMPT_FILE"' EXIT
+
+    # Create prompt by replacing placeholders
+    PROMPT="${TEMPLATE//\[\[DIFF\]\]/$DIFF}"
+
+    # Write prompt to temp file
+    echo "$PROMPT" > "$PROMPT_FILE"
+
+    just _call_ai committer "$PROMPT_FILE" task=commit_message
+
+# Commit with AI-generated message
+commit:
+    #!/usr/bin/env bash
+    echo "💬 Generating commit message..."
+
+    MSG=$(just commit-msg) || MSG=""
+
+    if [ -z "$MSG" ]; then
+      echo "❌ Failed to generate commit message"
+      exit 1
+    fi
+
+    echo "📝 Commit message:"
+    echo "$MSG"
+    echo ""
+    echo "Proceed? (y/N)"
+    read -r confirm
+
+    if [ "$confirm" = "y" ]; then
+      git commit -m "$MSG"
+      echo "✅ Committed"
+    else
+      echo "❌ Aborted"
+    fi
