@@ -1,8 +1,10 @@
 package com.ai4dev.tinderfordogs.support.presentation
 
+import com.ai4dev.tinderfordogs.support.model.ModelComparison
 import com.ai4dev.tinderfordogs.support.model.SupportRequest
 import com.ai4dev.tinderfordogs.support.model.SupportResponse
 import com.ai4dev.tinderfordogs.support.service.SupportAssistantService
+import com.ai4dev.tinderfordogs.support.service.SupportEvaluationService
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -13,6 +15,7 @@ import org.springframework.web.bind.annotation.RestController
 @RequestMapping("/api/v1/support")
 class SupportController(
     private val support: SupportAssistantService,
+    private val evaluation: SupportEvaluationService,
     @Value($$"${tinder4dogs.support.model}")
     private val model: String,
 ) {
@@ -24,4 +27,9 @@ class SupportController(
             answer = support.answer(req.message, req.history),
             model = model,
         )
+
+    @PostMapping("/compare")
+    suspend fun compareTo(
+        @RequestBody req: SupportRequest,
+    ): ModelComparison = evaluation.compare(req.message)
 }
