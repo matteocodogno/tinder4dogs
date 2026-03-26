@@ -1,0 +1,33 @@
+[tools]
+java = "25.0.2"
+maven = "3.9.12"
+kotlin = "2.3.10"
+
+[env]
+# Load secrets from direnv/infisical
+_.source = ".envrc"
+
+# Java/Maven settings
+MAVEN_OPTS = "-Xmx2g -Xms512m"
+
+# Project metadata
+PROJECT_NAME = "tinder-for-dogs"
+LANGFUSE_PROJECT = "whysoserious"
+
+[tasks]
+# Custom tasks (alternative to Justfile, or complement it)
+
+[tasks.setup]
+run = """
+  ai start
+  ./mvnw clean install
+"""
+description = "Initial setup"
+
+[tasks.lint]
+run = "./mvnw ktlint:format"
+description = "Lint the codebase"
+
+[tasks.dev]
+run = "./mvnw spring-boot:run"
+description = "Run in dev mode"
