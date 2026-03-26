@@ -497,3 +497,20 @@ gen-tests file:
 
     echo -e "{{ GREEN }}✅ Tests created at: $TEST_FILE{{ NC }}"
     echo -e "{{ BLUE }}💡 Run tests: just test{{ NC }}"
+
+# Comparison: cloud vs local
+compare-models prompt="Explain what a token is in 2 sentences":
+    #!/usr/bin/env bash
+    echo "🔵 Cloud (writer — Claude Sonnet):"
+    curl -s -X POST {{LITELLM_URL}} \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer {{LITELLM_KEY}}" \
+      -d '{"model":"writer","messages":[{"role":"user","content":"{{prompt}}"}]}' \
+      | jq -r '.choices[0].message.content'
+    echo ""
+    echo "🟢 Local (local-fast — Llama 3.2 3B):"
+    curl -s -X POST {{LITELLM_URL}} \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer {{LITELLM_KEY}}" \
+      -d '{"model":"local-fast","messages":[{"role":"user","content":"{{prompt}}"}]}' \
+      | jq -r '.choices[0].message.content'
