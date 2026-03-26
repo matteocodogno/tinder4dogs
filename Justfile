@@ -419,3 +419,42 @@ commit:
     else
       echo "❌ Aborted"
     fi
+
+# ============================================
+# ROLE: REVIEWER (Code Review)
+# ============================================
+
+# Review code file (saves report)
+review file:
+    #!/usr/bin/env bash
+    echo -e "{{ BLUE }}🔍 LLM (Reviewer) is analyzing {{file}}...{{ NC }}"
+
+    if [ ! -f "{{file}}" ]; then
+        echo -e "{{ RED }}❌ File not found: {{file}}{{ NC }}"
+        exit 1
+    fi
+
+    CODE=$(cat "{{file}}")
+
+    TEMPLATE=$(cat prompts/templates/code_review.md)
+
+    # Create prompt by replacing placeholders
+    PROMPT="${TEMPLATE//\[\[LANGUAGE\]\]/kotlin}"
+    PROMPT="${PROMPT//\[\[CONTEXT\]\]/Spring Boot service}"
+    PROMPT="${PROMPT//\[\[CODE\]\]/$CODE}"
+
+    # Write prompt to temp file
+    TEMP_PROMPT=$(mktemp)
+    echo "$PROMPT" > "$TEMP_PROMPT"
+
+    mkdir -p reviews
+    REVIEW_FILE="reviews/$(basename "{{file}}" .kt)-review-$(date +%Y%m%d-%H%M%S).md"
+
+    # Pass temp file path instead of content
+    just _call_ai reviewer "$TEMP_PROMPT" task=code_review file="{{file}}" | tee "$REVIEW_FILE"
+
+    # Cleanup
+    rm -f "$TEMP_PROMPT"
+
+    echo ""
+    echo -e "{{ GREEN }}✅ Review saved to: $REVIEW_FILE{{ NC }}"
