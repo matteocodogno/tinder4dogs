@@ -13,6 +13,7 @@ class FineTuningPipelineService(
     private val augmentor: DataAugmentor,
     private val splitter: DatasetSplitter,
     private val exporter: JsonlExporter,
+    private val tuningService: FineTuningJobService,
 ) {
     suspend fun run(submitJob: Boolean = false): FineTuningJob? {
         logger.info { "🚀 Starting fine-tuning pipeline for Tinder for Dogs..." }
@@ -48,6 +49,15 @@ class FineTuningPipelineService(
             """.trimIndent()
         }
 
-        return null
+        // 7. Submit (optional — requires valid OpenAI API key)
+        if (!submitJob) {
+            logger.info { "⏸️ Skipping job submission (submitJob=false). Files ready at: ${export.trainFile.parent}" }
+            return null
+        }
+
+        val trainFileId = tuningService.uploadFile(export.trainFile)
+        val valFileId = tuningService.uploadFile(export.validationFile)
+
+        return tuningService.createJob(trainFileId, valFileId)
     }
 }
