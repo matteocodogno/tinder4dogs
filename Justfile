@@ -458,3 +458,42 @@ review file:
 
     echo ""
     echo -e "{{ GREEN }}✅ Review saved to: $REVIEW_FILE{{ NC }}"
+
+# ============================================
+# ROLE: TESTER (Test Generation)
+# ============================================
+
+# Generate tests for a file
+gen-tests file:
+    #!/usr/bin/env bash
+    echo -e "{{ BLUE }}🧪 LLM (Tester) is generating tests...{{ NC }}"
+
+    if [ ! -f "{{file}}" ]; then
+        echo -e "{{ RED }}❌ File not found: {{file}}{{ NC }}"
+        exit 1
+    fi
+
+    CODE=$(cat {{file}})
+    TEMPLATE=$(cat prompts/templates/generate_tests.md)
+
+    # Create prompt by replacing placeholders
+    PROMPT="${TEMPLATE//\[\[CODE\]\]/$CODE}"
+    PROMPT="${PROMPT//\[\[FRAMEWORK\]\]/JUnit 5, MockK, Spring Boot Test}"
+
+    # Write prompt to temp file
+    TEMP_PROMPT=$(mktemp)
+    echo "$PROMPT" > "$TEMP_PROMPT"
+
+    # Determine test file path
+    TEST_FILE=$(echo {{file}} | \
+      sed 's|src/main/kotlin|src/test/kotlin|g' | \
+      sed 's|\.kt|Test.kt|g')
+
+    mkdir -p $(dirname "$TEST_FILE")
+    just _call_ai tester "$TEMP_PROMPT" task=code_review file="{{file}}" | tee "$TEST_FILE"
+
+    # Cleanup
+    rm -f "$TEMP_PROMPT"
+
+    echo -e "{{ GREEN }}✅ Tests created at: $TEST_FILE{{ NC }}"
+    echo -e "{{ BLUE }}💡 Run tests: just test{{ NC }}"
