@@ -19,3 +19,6 @@ server:
 litellm:
   url: http://localhost:4000
   key: ${LITELLM_MASTER_KEY}
+
+openai:
+  api-key: ${OPENAI_API_KEY:not-set}   # only needed for job submission
