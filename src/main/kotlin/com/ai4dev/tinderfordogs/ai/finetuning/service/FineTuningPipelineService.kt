@@ -9,6 +9,7 @@ private val logger = KotlinLogging.logger {}
 @Service
 class FineTuningPipelineService(
     private val loader: RawDataLoader,
+    private val cleaner: DataCleaner,
 ) {
     suspend fun run(submitJob: Boolean = false): FineTuningJob? {
         logger.info { "🚀 Starting fine-tuning pipeline for Tinder for Dogs..." }
@@ -17,6 +18,10 @@ class FineTuningPipelineService(
         val seeds = loader.loadSeedExamples()
         val raw = loader.toTrainingExamples(seeds, RawDataLoader.SYSTEM_PROMPT)
         logger.info { "📥 Loaded ${raw.size} seed examples" }
+
+        // 2. Clean
+        val (cleaned, report) = cleaner.clean(raw)
+        logger.info { "🧹 Cleaning report: $report" }
 
         return null
     }
