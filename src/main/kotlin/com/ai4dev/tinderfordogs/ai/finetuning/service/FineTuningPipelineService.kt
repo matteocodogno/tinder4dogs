@@ -11,6 +11,7 @@ class FineTuningPipelineService(
     private val loader: RawDataLoader,
     private val cleaner: DataCleaner,
     private val augmentor: DataAugmentor,
+    private val splitter: DatasetSplitter,
 ) {
     suspend fun run(submitJob: Boolean = false): FineTuningJob? {
         logger.info { "🚀 Starting fine-tuning pipeline for Tinder for Dogs..." }
@@ -31,6 +32,12 @@ class FineTuningPipelineService(
         // 4. Clean again (augmented data may have issues)
         val (finalExamples, _) = cleaner.clean(augmented)
         logger.info { "✅ Final clean dataset: ${finalExamples.size} examples" }
+
+        // 5. Split
+        val split = splitter.split(finalExamples)
+        logger.info {
+            "✂️ Split into ${split.train.size} training, ${split.validation.size} validation examples and ${split.test.size} test examples"
+        }
 
         return null
     }
