@@ -2,6 +2,7 @@ package com.ai4dev.tinderfordogs.match.service
 
 import com.ai4dev.tinderfordogs.match.model.Dog
 import org.springframework.stereotype.Service
+import kotlin.math.abs
 
 @Service
 class DogMatcherService {
@@ -15,7 +16,7 @@ class DogMatcherService {
     ): Double {
         var score = 0.0
 
-        val ageDiff = dog1.age - dog2.age
+        val ageDiff = abs(dog1.age - dog2.age)
         score +=
             when {
                 ageDiff < 2 -> 30.0
