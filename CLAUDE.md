@@ -16,6 +16,45 @@
 
 ---
 
+## Execution rules
+- Before implementing any task: show a plan and wait for explicit approval
+- After each task: stop, show git diff summary + test results, wait for GO/NO
+- Never move to the next task without a human "go ahead"
+- If tests fail: surface the failure, propose a fix, wait for approval before applying
+
+## Commit message rules (Conventional Commits)
+- Format: <type>(<scope>): <description>
+- Types: feat | fix | docs | style | refactor | test | chore | perf | ci
+- scope = task ID or module name, e.g. feat(task-7): or fix(auth):
+- Description: imperative, lowercase, no period, max 72 chars
+- Breaking changes: add BREAKING CHANGE: in footer
+- Examples:
+  feat(stripe): add webhook signature validation
+  fix(auth): handle 401 on token refresh
+  test(pdf): add export edge case coverage
+  chore(deps): upgrade stripe-node to v14
+- NEVER use generic messages like "fix bug" or "update code"
+
+## Never do
+- Implement tasks not in tasks.md
+- Skip the quality gate on stories (ambiguity_risk=High → not ready)
+- Write acceptance criteria without at least one failure scenario
+
+---
+
+## GitHub Issues sync rules
+- When tasks.md is finalized: create one GitHub Issue per task
+  - Title: task title from tasks.md
+  - Body: acceptance criteria + link to .kiro/specs/<feature>/tasks.md
+  - Label: "spec-task", milestone = feature name
+  - Save the issue number back into tasks.md as a comment: <!-- gh:#42 -->
+- When starting a task: add label "in-progress" to its issue
+- When a task checkbox is ticked - [x]: close the issue with "Closes #N" in the commit footer
+- Never close an issue without the corresponding checkbox being ticked first
+- Never tick a checkbox without closing the issue (keep them atomic)
+
+---
+
 # AI-DLC and Spec-Driven Development
 
 Kiro-style Spec Driven Development implementation on AI-DLC (AI Development Life Cycle)
