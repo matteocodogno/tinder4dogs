@@ -24,3 +24,46 @@
 2. When [event] and [condition], the [system] shall [response/action]
 
 <!-- Additional requirements follow the same pattern -->
+
+## Non-Functional Requirements
+
+### Performance
+| NFR ID | Description | Threshold | Priority | Source Req |
+|--------|-------------|-----------|----------|------------|
+|        |             |           |          |            |
+
+### Security
+| NFR ID | Description | Threshold | Priority | Source Req |
+|--------|-------------|-----------|----------|------------|
+|        |             |           |          |            |
+
+### Scalability
+| NFR ID | Description | Threshold | Priority | Source Req |
+|--------|-------------|-----------|----------|------------|
+|        |             |           |          |            |
+
+### Reliability
+| NFR ID | Description | Threshold | Priority | Source Req |
+|--------|-------------|-----------|----------|------------|
+|        |             |           |          |            |
+
+### Observability
+| NFR ID | Description | Threshold | Priority | Source Req |
+|--------|-------------|-----------|----------|------------|
+|        |             |           |          |            |
+
+### Usability
+| NFR ID | Description | Threshold | Priority | Source Req |
+|--------|-------------|-----------|----------|------------|
+|        |             |           |          |            |
+
+### Constraints
+| NFR ID | Description | Threshold | Priority | Source Req |
+|--------|-------------|-----------|----------|------------|
+|        |             |           |          |            |
+
+## Open Questions
+
+| # | Question | Impact | Owner | Status |
+|---|----------|--------|-------|--------|
+|   |          |        |       | Open   |
