@@ -1,3 +1,21 @@
+# Tinder for Dogs
+
+## Domain Glossary
+| Term                | Definition                                    |
+|---------------------|-----------------------------------------------|
+| Owner               | A registered human user of the platform       |
+| Dog Profile         | breed, age, photos, temperament tags          |
+| Match               | A mutual "right swipe" between two dog owners |
+| Compatibility Score | AI score (0-100) based on breed matrix + tags |
+| Superlike           | Premium: signals strong interest before match |
+
+## User Personas
+- **Casual Owner** — finds playmates. Low tech savvy.
+- **Breeder** — professional use. Needs breed/health filtering.
+- **Rescue Coordinator** — manages multiple profiles. Needs bulk ops.
+
+---
+
 # AI-DLC and Spec-Driven Development
 
 Kiro-style Spec Driven Development implementation on AI-DLC (AI Development Life Cycle)
