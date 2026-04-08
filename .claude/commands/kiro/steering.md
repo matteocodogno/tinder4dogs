@@ -1,5 +1,5 @@
 ---
-description: Manage .kiro/steering/ as persistent project knowledge
+description: Manage .kiro/prd.md/ as persistent project knowledge
 allowed-tools: Bash, Read, Write, Edit, MultiEdit, Glob, Grep, LS
 ---
 
