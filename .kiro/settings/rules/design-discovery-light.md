@@ -47,3 +47,31 @@ Switch to full discovery if you find:
 - New dependencies with versions
 - Integration risks and mitigations
 - Testing focus areas
+---
+
+## Sequence Diagram (Light)
+Always generate docs/diagrams/[feature]-sequence.md.
+Follow the Sequence Diagram scaffold in templates/design.md.
+Include integration points with the existing system.
+
+## Corner Cases (Light — focused)
+Write a ## Corner Cases section in design.md covering only:
+
+### Integration failure modes
+For every new external dependency or integration point:
+- What happens if it is slow / errors / unavailable?
+- What is the fallback or degraded behaviour?
+
+### Security edge cases
+- Any new auth bypass or privilege escalation vectors?
+- Token or session expiry during the extended operation?
+
+Omit input boundary, state/timing, and data edge cases unless
+full discovery has been triggered.
+
+## Research Log (Light)
+Append to docs/research/[feature]-research.md:
+- New dependencies added with versions and rationale
+- Integration risks and mitigations
+- Any compatibility issues found
+- References for technology choices
