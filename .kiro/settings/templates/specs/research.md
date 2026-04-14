@@ -59,3 +59,20 @@ _Repeat the subsection for each decision._
 Provide canonical links and citations (official docs, standards, ADRs, internal guidelines).
 - [Title](https://example.com) — brief note on relevance
 - ...
+
+---
+
+# ADR Format
+
+When design-principles.md instructs you to produce an ADR,
+write docs/adr/ADR-001-[decision-slug].md with this exact format:
+
+- **Status**: Proposed
+- **Context**: 2-3 sentences max — only facts that drove the decision
+- **Decision**: 1 sentence for the choice + bullet points for implementation
+- **Consequences**:
+  - ✔ at least 3 — specific to this system, measurable or observable
+  - ✘ at least 2 — specific to this system, measurable or observable
+  - No generic trade-offs (never write "increases complexity" without quantifying)
+- **Alternatives**: WHY each was rejected, not just that it was
+- **References**: link to spec files and NFR IDs from requirements.md
