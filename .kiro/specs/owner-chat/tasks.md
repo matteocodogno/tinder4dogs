@@ -30,7 +30,7 @@
   - _Requirements: 2.1, 4.1, 4.3, 5.1_
 
 - [ ] 3. Implement core chat service business logic <!-- gh:#30 -->
-- [ ] 3.1 Implement chat thread lifecycle <!-- gh:#40 -->
+- [x] 3.1 Implement chat thread lifecycle <!-- gh:#40 -->
   - Implement thread creation: persist a new thread given a match reference and two participant owner IDs; prevent duplicate threads for the same match
   - Implement thread deletion: remove all messages and then the thread itself within a single transaction; rely on the cascade FK as a safety net; treat deletion of an unknown match as a not-found condition
   - _Requirements: 1.3, 5.1, 5.2, 5.3, 5.4_

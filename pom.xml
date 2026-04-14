@@ -157,6 +157,14 @@
 			<artifactId>spring-boot-starter-security-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+
+		<!-- MockK for Kotlin mocking -->
+		<dependency>
+			<groupId>io.mockk</groupId>
+			<artifactId>mockk-jvm</artifactId>
+			<version>1.14.9</version>
+			<scope>test</scope>
+		</dependency>
 	</dependencies>
 
 	<build>
