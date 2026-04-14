@@ -1,140 +1,139 @@
 # Implementation Plan
 
-- [ ] 1. Set up dependencies and database schema
-- [ ] 1.1 Add new Maven dependencies to pom.xml
-  - Add `spring-boot-starter-websocket` for STOMP/WebSocket support
-  - Add `spring-boot-starter-security` for JWT HTTP filter chain
-  - Add `com.auth0:java-jwt:4.x` for JWT token creation and validation
-  - Add `com.bucket4j:bucket4j-core:8.17.0` for per-owner rate limiting
-  - Add `org.liquibase:liquibase-core` and configure it in `application.yaml` (disable `ddl-auto`)
+- [ ] 1. Set up project dependencies and database schema <!-- gh:#28 -->
+- [ ] 1.1 Add required Maven dependencies <!-- gh:#36 -->
+  - Add the WebSocket/STOMP starter to enable real-time messaging infrastructure
+  - Add the Spring Security starter for JWT-based HTTP authentication
+  - Add the Auth0 Java JWT library for token signature verification and claims extraction
+  - Add the Bucket4j core library for in-memory token-bucket rate limiting
+  - Add Liquibase core and configure it as the schema migration tool; disable Hibernate DDL auto-update
   - _Requirements: 7.1, 8.1_
 
-- [ ] 1.2 Create Liquibase migration for chat schema
-  - Create the `chat_thread` table: UUID primary key, unique `match_id`, two owner ID columns, last-message preview and timestamp, created-at timestamp
-  - Create the `chat_message` table: UUID primary key, foreign key to `chat_thread` with `ON DELETE CASCADE`, sender owner ID, content (max 2000 chars), sent-at timestamp
-  - Add indexes: `match_id` on `chat_thread`; both owner ID columns on `chat_thread`; composite `(thread_id, sent_at ASC)` on `chat_message`
-  - Include a functional rollback block that drops both tables in reverse order
+- [ ] 1.2 Create Liquibase migration for the chat database schema <!-- gh:#37 -->
+  - Define the `chat_thread` table: UUID primary key, unique match reference, two participant owner ID columns, last-message preview (up to 100 characters), last-message timestamp, and creation timestamp
+  - Define the `chat_message` table: UUID primary key, foreign key to `chat_thread` with cascade delete, sender owner ID, content column capped at 2,000 characters, and sent-at timestamp
+  - Add indexes on the match reference and both owner ID columns of `chat_thread`; add a composite `(thread_id, sent_at ASC)` index on `chat_message` for efficient paginated history queries
+  - Include a rollback block that drops both tables in reverse dependency order
   - _Requirements: 2.1, 4.5, 5.1, 5.2_
 
-- [ ] 2. Implement JPA entities and repositories
-- [ ] 2.1 (P) Implement the ChatThread entity and its repository
-  - Map the `chat_thread` table as a JPA entity with all columns from the Liquibase migration
-  - Add repository method to look up a thread by `matchId`
-  - Add repository method to find all threads where the caller is either owner (for inbox queries)
+- [ ] 2. Implement the chat data access layer <!-- gh:#29 -->
+- [ ] 2.1 (P) Implement the chat thread entity and repository <!-- gh:#38 -->
+  - Map the `chat_thread` table as a persistent entity with all columns from the migration
+  - Provide a query to look up a thread by its associated match reference
+  - Provide a query to find all threads where a given owner is either of the two participants (used for inbox listing)
   - _Requirements: 1.3, 6.1, 6.3_
 
-- [ ] 2.2 (P) Implement the ChatMessage entity and its repository
-  - Map the `chat_message` table as a JPA entity
-  - Add repository method to fetch messages by thread ID ordered by `sentAt` ascending, with pagination support
-  - Add repository method to bulk-delete all messages for a given thread ID
+- [ ] 2.2 (P) Implement the chat message entity and repository <!-- gh:#39 -->
+  - Map the `chat_message` table as a persistent entity
+  - Provide a paginated query to retrieve all messages for a given thread ordered by sent-at ascending
+  - Provide a bulk-delete query to remove all messages for a given thread by ID
   - _Requirements: 2.1, 4.1, 4.3, 5.1_
 
-- [ ] 3. Implement core chat service
-- [ ] 3.1 Implement thread lifecycle in ChatService
-  - Implement `createThread`: persist a new `ChatThread` given a match ID and two owner IDs; guard against duplicate threads for the same match ID
-  - Implement `deleteThread`: delete all messages for the thread and then delete the thread itself in a single transaction, using the `ON DELETE CASCADE` FK as a safety net
-  - Raise a not-found exception when `deleteThread` is called for an unknown match ID
+- [ ] 3. Implement core chat service business logic <!-- gh:#30 -->
+- [ ] 3.1 Implement chat thread lifecycle <!-- gh:#40 -->
+  - Implement thread creation: persist a new thread given a match reference and two participant owner IDs; prevent duplicate threads for the same match
+  - Implement thread deletion: remove all messages and then the thread itself within a single transaction; rely on the cascade FK as a safety net; treat deletion of an unknown match as a not-found condition
   - _Requirements: 1.3, 5.1, 5.2, 5.3, 5.4_
 
-- [ ] 3.2 Implement message send in ChatService
-  - Implement internal `validateAccess` helper that confirms the requesting owner is a participant of the thread; throw `AccessDeniedException` otherwise
-  - Implement `sendMessage`: validate access, reject blank content and content exceeding 2,000 characters, persist the message, update the thread's `lastMessagePreview` and `lastMessageAt`, then dispatch the message event to the recipient via `SimpMessagingTemplate` — persist before dispatch
+- [ ] 3.2 Implement message sending with access control and content validation <!-- gh:#41 -->
+  - Enforce the participant invariant before any read or write: verify the requesting owner is one of the two participants; raise an access-denied error for non-participants
+  - Reject messages that are blank or exceed 2,000 characters before any database write
+  - Persist the accepted message with sender owner ID, thread reference, content, and UTC timestamp; atomically update the thread's last-message preview and timestamp
+  - Dispatch the persisted message to the recipient over the STOMP broker only after the database write succeeds (persist-before-push)
   - _Requirements: 1.1, 1.2, 1.4, 1.5, 2.1, 2.2, 2.3, 2.4, 2.5, 8.3_
 
-- [ ] 3.3 Implement read operations in ChatService
-  - Implement `getMessageHistory`: validate that the requesting owner is a participant, then return a paginated page of messages in ascending chronological order
-  - Implement `getInbox`: return all threads where the owner participates, each enriched with matched-dog name, photo URL, last message preview, and last message timestamp; sort by most recent message first
-  - Return 403 when a non-participant requests history; return empty list (not an error) when the owner has no threads
+- [ ] 3.3 Implement message history retrieval and inbox listing <!-- gh:#42 -->
+  - Implement paginated message history: verify participant access, then return messages in ascending chronological order with sender owner ID, content, and UTC timestamp
+  - Implement inbox listing: return all threads the owner participates in, each including matched-dog name, photo URL, last-message preview, and last-message timestamp; sort by most recent message first
+  - Return 403 when a non-participant requests history; return an empty list (not an error) when the owner has no active threads; include threads with no messages in the inbox with null preview and null timestamp
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 6.1, 6.2, 6.3, 6.4, 6.5, 8.3_
 
-- [ ] 3.4 (P) Implement RateLimitService
-  - Implement the `consume(ownerId)` method using a Bucket4j token bucket: capacity 30, refill 30 tokens per 60 seconds
-  - Store buckets in a `ConcurrentHashMap` keyed by owner UUID; create on first access
-  - Throw `RateLimitExceededException` containing `retryAfterMs` when the bucket is exhausted
-  - Expose the messages-per-minute value as a configurable `application.yaml` property (`tinder4dogs.chat.rate-limit.messages-per-minute`) defaulting to 30
-  - Can be developed in parallel with tasks 3.1–3.3 as it is a standalone class with no dependency on ChatService
+- [ ] 3.4 (P) Implement per-owner rate limiting <!-- gh:#43 -->
+  - Implement a rate-limit check that consumes one token from the requesting owner's bucket before allowing a message send; create a bucket for each owner on first access
+  - Configure the token bucket: capacity 30 tokens, refill 30 tokens per 60 seconds
+  - Signal exhaustion by raising a rate-limit error that includes the number of milliseconds until the next token is available
+  - Expose the messages-per-minute threshold as a configurable application property (`tinder4dogs.chat.rate-limit.messages-per-minute`) defaulting to 30
+  - Can be developed in parallel with tasks 3.1–3.3; it has no dependency on the chat service
   - _Requirements: 3.1, 3.2, 3.3, 3.4_
 
-- [ ] 4. Implement security and WebSocket infrastructure
-- [ ] 4.1 (P) Implement JWT utility and HTTP security filter chain
-  - Implement a JWT utility that verifies token signature, expiry, and extracts the owner UUID as the principal name
-  - Implement a `OncePerRequestFilter` that reads the `Authorization: Bearer` header, validates the JWT, and sets the Spring Security authentication context
-  - Configure `SecurityFilterChain`: stateless session, apply the JWT filter, require authentication on `/api/v1/chat/**`, and permit existing endpoints (`/api/v1/matches/**`, `/api/v1/support/**`) without auth during transition
+- [ ] 4. Implement security and WebSocket infrastructure <!-- gh:#31 -->
+- [ ] 4.1 (P) Implement JWT authentication for HTTP requests <!-- gh:#44 -->
+  - Implement a JWT verification utility that checks token signature, expiry, and extracts the owner UUID as the authenticated principal
+  - Implement a per-request filter that reads the `Authorization: Bearer` header, validates the JWT, and populates the security context with the authenticated owner identity
+  - Configure the HTTP security filter chain with stateless session management; require authentication on all `/api/v1/chat/**` endpoints; permit existing match and support endpoints without auth during the transition period; allow WebSocket upgrade requests at the HTTP level (auth is handled at the STOMP layer)
   - _Requirements: 8.1, 8.2_
 
-- [ ] 4.2 (P) Configure the WebSocket STOMP broker
-  - Register the `/ws` WebSocket endpoint with SockJS fallback enabled
-  - Configure the in-memory STOMP broker: app destination prefix `/app`, broker prefix `/queue`, user destination prefix `/user`
-  - Enable STOMP heartbeat (10 s send / 10 s receive) to prevent proxy-induced connection drops
-  - Add Tomcat WebSocket text buffer size configuration (`65536` bytes) to `application.yaml`
-  - Can be developed in parallel with 4.1 — no shared configuration files
+- [ ] 4.2 (P) Configure the STOMP WebSocket broker <!-- gh:#45 -->
+  - Register the `/ws` endpoint as the WebSocket handshake point with SockJS fallback enabled for environments that block raw WebSocket upgrades
+  - Configure an in-memory STOMP message broker with application prefix `/app`, broker prefix `/queue`, and per-user destination prefix `/user`
+  - Enable STOMP heartbeat frames (10 s send / 10 s receive) to prevent proxy-induced connection timeouts
+  - Set the Tomcat WebSocket text buffer size to 65,536 bytes in `application.yaml`
+  - Can be developed in parallel with 4.1; no shared configuration files
   - _Requirements: 7.1_
 
-- [ ] 4.3 Implement JwtChannelInterceptor for STOMP authentication
-  - Intercept only `CONNECT` frames; extract the `Authorization` header from the STOMP headers
-  - Validate the JWT using the utility from 4.1; set the authenticated principal on the accessor so Spring routes per-user messages correctly
-  - Reject the connection (throw `MessageDeliveryException`) if the token is absent, expired, or invalid
-  - Register the interceptor on the inbound channel with `@Order(Ordered.HIGHEST_PRECEDENCE + 99)` ahead of Spring Security interceptors; disable CSRF manually (no `@EnableWebSocketSecurity`)
-  - Depends on JWT utility (4.1) and WebSocket config (4.2)
+- [ ] 4.3 Implement JWT authentication for WebSocket connections <!-- gh:#46 -->
+  - Intercept only the STOMP CONNECT frame on the inbound channel; extract the JWT from the STOMP authorization header; validate it using the utility from 4.1; set the authenticated owner identity as the STOMP principal so per-user message routing works correctly
+  - Reject the connection (close the WebSocket with code 4001) when the token is absent, expired, or invalid
+  - Register the interceptor with higher precedence than Spring Security's own interceptors; disable CSRF for the stateless JWT flow
+  - Depends on JWT utility (4.1) and WebSocket broker config (4.2)
   - _Requirements: 7.2, 7.3, 8.1, 8.2_
 
-- [ ] 5. (P) Implement REST API endpoints
-  - Implement `GET /api/v1/chat/threads` — returns the inbox list; delegates to `ChatService.getInbox` using the authenticated owner ID from the security context
-  - Implement `GET /api/v1/chat/threads/{matchId}/messages` — accepts `page` (default 0) and `size` (default 50, max 100) query parameters; delegates to `ChatService.getMessageHistory`
-  - Map `AccessDeniedException` to 403, not-found exceptions to 404, and unauthenticated requests are handled upstream by the security filter
-  - Can be developed in parallel with task 6 — separate controller class, no shared files
+- [ ] 5. (P) Implement REST chat endpoints <!-- gh:#32 -->
+  - Expose `GET /api/v1/chat/threads` for inbox listing; extract the authenticated owner from the security context and delegate to the chat service
+  - Expose `GET /api/v1/chat/threads/{matchId}/messages` for paginated message history; accept `page` (default 0) and `size` (default 50, max 100) query parameters; delegate to the chat service
+  - Map access-denied errors to 403, not-found errors to 404; unauthenticated requests are rejected upstream by the security filter
+  - Can be developed in parallel with task 6; the REST controller and WebSocket controller are separate classes with no shared files
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 6.1, 6.2, 6.3, 6.4, 6.5, 8.1, 8.2, 8.3_
 
-- [ ] 6. (P) Implement WebSocket messaging controller
-  - Implement `@MessageMapping("/chat.send")` handler: extract the authenticated principal (set by `JwtChannelInterceptor`), call `RateLimitService.consume`, then delegate to `ChatService.sendMessage`
-  - On success: push a `MessageEvent` to the sender's `/user/queue/messages` (ACK) and, via `ChatService`, to the recipient's `/user/queue/messages` (push)
-  - On `RateLimitExceededException`: send an `ErrorEvent(code=RATE_LIMIT_EXCEEDED, retryAfterMs=...)` to the caller's `/user/queue/errors`
-  - On `AccessDeniedException` or validation failure: send an appropriate `ErrorEvent` to `/user/queue/errors`
-  - Can be developed in parallel with task 5 — separate controller class, no shared files
-  - Depends on tasks 3, 4.2, and 4.3
+- [ ] 6. (P) Implement the real-time WebSocket messaging handler <!-- gh:#33 -->
+  - Implement a STOMP message handler on `/app/chat.send`; extract the authenticated owner identity set by the JWT interceptor; invoke the rate limiter before any business logic
+  - On a successful rate-limit check, delegate to the chat service to persist and dispatch the message; push a confirmation event to the sender's `/user/queue/messages`
+  - On a rate-limit breach, send an error event to the caller's `/user/queue/errors` with code `RATE_LIMIT_EXCEEDED` and the retry-after duration in milliseconds
+  - On an access-denied or content-validation failure, send an appropriate error event to `/user/queue/errors`
+  - Can be developed in parallel with task 5; depends on tasks 3, 4.2, and 4.3
   - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 3.2, 3.3, 3.4, 7.1, 7.2, 7.4, 7.5, 7.6, 8.1, 8.5_
 
-- [ ] 7. Wire MatchService integration and finalize configuration
-- [ ] 7.1 Expose chat thread lifecycle hook for the match domain
-  - Add a `createThread` call site in the match domain (in the existing or future persistent `MatchService`) to be triggered when a mutual match is confirmed; wire it to `ChatService.createThread`
-  - Add a `deleteThread` call site in the match domain to be triggered when a match is deleted; wire it to `ChatService.deleteThread`
-  - If a persistent `MatchService` does not yet exist, create a placeholder integration point (a clearly named method stub or TODO marker at the expected call site) so the boundary is established
+- [ ] 7. Wire match domain integration and finalize configuration <!-- gh:#34 -->
+- [ ] 7.1 Hook up chat thread lifecycle to the match domain <!-- gh:#47 -->
+  - Add a thread-creation call at the point in the match domain where a mutual match is confirmed; pass the match reference and both participant owner IDs to the chat service
+  - Add a thread-deletion call at the point where a match is removed; ensure the deletion is invoked before or within the same transaction as the match removal
+  - If a persistent match service does not yet exist, establish a clearly named placeholder at the expected call site to make the integration boundary visible
   - _Requirements: 1.3, 5.1, 5.2, 5.3, 5.4_
 
-- [ ] 7.2 Finalize application configuration
+- [ ] 7.2 Finalize application configuration <!-- gh:#48 -->
   - Add `tinder4dogs.chat.rate-limit.messages-per-minute: 30` to `application.yaml`
   - Add `server.tomcat.websocket.max-text-message-buffer-size: 65536` to `application.yaml`
-  - Add Liquibase `change-log` path and disable `spring.jpa.hibernate.ddl-auto` (set to `validate`)
+  - Configure the Liquibase change-log path; set `spring.jpa.hibernate.ddl-auto` to `validate` to prevent accidental schema drift
   - _Requirements: 3.1, 7.1_
 
-- [ ] 8. Write tests
-- [ ] 8.1 (P) Unit test ChatService and RateLimitService
-  - Test `validateAccess`: participant owner passes, non-participant throws `AccessDeniedException`
-  - Test `sendMessage` validation: blank content rejected, exactly 2,000 chars accepted, 2,001 chars rejected
-  - Test `deleteThread`: verify messages and thread are deleted; calling again on a missing thread raises not-found exception
-  - Test `RateLimitService`: 30 consecutive `consume` calls succeed; 31st throws `RateLimitExceededException` with a positive `retryAfterMs`
-  - Use MockK to stub repository and `SimpMessagingTemplate` dependencies
+- [ ] 8. Write automated tests <!-- gh:#35 -->
+- [ ] 8.1 (P) Unit test the chat service and rate limiter <!-- gh:#49 -->
+  - Test the participant access check: a participant owner passes; a non-participant raises an access-denied error
+  - Test message content validation: blank content is rejected; exactly 2,000 characters is accepted; 2,001 characters is rejected
+  - Test thread deletion: both messages and the thread are removed; calling delete again on an unknown thread raises a not-found error
+  - Test the rate limiter: 30 consecutive calls succeed; the 31st raises a rate-limit error with a positive retry-after value
+  - Stub repository and messaging broker dependencies
   - _Requirements: 1.1, 1.2, 1.4, 2.3, 2.4, 3.1, 3.2, 5.3, 5.4_
 
-- [ ] 8.2 (P) Integration test repositories and ChatService with TestContainers
-  - Spin up a PostgreSQL container; run Liquibase migrations before tests
-  - Test persist-and-retrieve round-trip for `ChatMessage` and `ChatThread`
-  - Test paginated `getMessageHistory` returns messages in ascending `sentAt` order
-  - Test cascade delete: deleting a `ChatThread` removes all its `ChatMessage` rows
-  - Test `ChatService.sendMessage` end-to-end: persists message, updates thread `lastMessageAt`, and calls `SimpMessagingTemplate.convertAndSendToUser` with the recipient's owner ID
+- [ ] 8.2 (P) Integration test the data layer and chat service with a real database <!-- gh:#50 -->
+  - Spin up a PostgreSQL test container and run the Liquibase migration before tests
+  - Verify a round-trip persist-and-retrieve for chat threads and messages
+  - Verify paginated message history returns messages in ascending sent-at order
+  - Verify that deleting a thread removes all its messages via the cascade constraint
+  - Verify the full send-message flow: message persisted, thread last-message fields updated, and the broker push triggered with the correct recipient identity
   - _Requirements: 2.1, 2.2, 4.1, 4.3, 5.1, 5.2_
 
-- [ ] 8.3 (P) WebSocket integration test with StompClient
-  - Use Spring's `WebSocketStompClient` to connect with a valid JWT CONNECT header; send to `/app/chat.send`; assert `MessageEvent` received on `/user/queue/messages`
+- [ ] 8.3 (P) WebSocket integration test with a live STOMP client <!-- gh:#51 -->
+  - Connect with a valid JWT in the STOMP CONNECT header; send to `/app/chat.send`; assert a message event is received on `/user/queue/messages`
   - Assert that connecting without a JWT (or with an expired token) is rejected
-  - Assert that a non-participant send results in an `ErrorEvent(code=ACCESS_DENIED)` on `/user/queue/errors`
-  - Assert that the 31st message in a rate-limit window produces an `ErrorEvent(code=RATE_LIMIT_EXCEEDED)` with a positive `retryAfterMs`
+  - Assert that a non-participant send produces an error event on `/user/queue/errors` with code `ACCESS_DENIED`
+  - Assert that the 31st message in a rate-limit window produces an error event with code `RATE_LIMIT_EXCEEDED` and a positive retry-after value
   - _Requirements: 7.1, 7.2, 7.3, 7.4, 3.2, 8.1, 8.2_
 
-- [ ]* 8.4 (P) REST security and edge-case tests
-  - `GET /api/v1/chat/threads` without JWT → 401
-  - `GET /api/v1/chat/threads/{matchId}/messages` for a thread the caller does not participate in → 403
-  - `GET /api/v1/chat/threads/{matchId}/messages` after the match is deleted → 404
-  - `GET /api/v1/chat/threads` when the owner has no matches → 200 with empty list
-  - Verify message content is not present in any logged output (mock appender check)
+- [ ]* 8.4 (P) REST security and edge-case tests <!-- gh:#52 -->
+  - Verify `GET /api/v1/chat/threads` without a JWT returns 401
+  - Verify `GET /api/v1/chat/threads/{matchId}/messages` for a non-participant thread returns 403
+  - Verify access to a deleted thread returns 404
+  - Verify an owner with no active matches receives 200 with an empty list
+  - Verify message content does not appear in any logged output
   - _Requirements: 4.4, 5.3, 6.4, 8.1, 8.2, 8.5_
