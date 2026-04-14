@@ -17,13 +17,13 @@
   - _Requirements: 2.1, 4.5, 5.1, 5.2_
 
 - [ ] 2. Implement the chat data access layer <!-- gh:#29 -->
-- [ ] 2.1 (P) Implement the chat thread entity and repository <!-- gh:#38 -->
+- [x] 2.1 (P) Implement the chat thread entity and repository <!-- gh:#38 -->
   - Map the `chat_thread` table as a persistent entity with all columns from the migration
   - Provide a query to look up a thread by its associated match reference
   - Provide a query to find all threads where a given owner is either of the two participants (used for inbox listing)
   - _Requirements: 1.3, 6.1, 6.3_
 
-- [ ] 2.2 (P) Implement the chat message entity and repository <!-- gh:#39 -->
+- [x] 2.2 (P) Implement the chat message entity and repository <!-- gh:#39 -->
   - Map the `chat_message` table as a persistent entity
   - Provide a paginated query to retrieve all messages for a given thread ordered by sent-at ascending
   - Provide a bulk-delete query to remove all messages for a given thread by ID
