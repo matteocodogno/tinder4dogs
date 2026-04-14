@@ -1,13 +1,13 @@
 # Implementation Plan
 
-- [ ] 1. Set up project infrastructure for the dog profile feature
+- [x] 1. Set up project infrastructure for the dog profile feature
 - [x] 1.1 Add new Maven dependencies and enable async event dispatching <!-- gh:#2 -->
   - Add `spring-boot-starter-security` and AWS SDK v2 `s3` artifact to `pom.xml`
   - Add an `AsyncConfig` class annotated `@EnableAsync` so Spring can dispatch domain events off the calling thread
   - Verify the project still compiles and all existing tests pass after the dependency additions
   - _Requirements: NFR-S01, NFR-C03_
 
-- [ ] 1.2 Add MinIO configuration properties and local dev service <!-- gh:#3 -->
+- [x] 1.2 Add MinIO configuration properties and local dev service <!-- gh:#3 -->
   - Declare `minio.url`, `minio.access-key`, `minio.secret-key`, and `minio.bucket` placeholders in `application.yaml` using environment-variable substitution (consistent with existing secret management)
   - Add a MinIO service entry to the Docker Compose file used for local development so the bucket is available immediately on `just dev`
   - _Requirements: NFR-C03_

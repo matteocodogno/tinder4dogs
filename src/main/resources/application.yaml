@@ -27,6 +27,12 @@ tinder4dogs:
   support:
     model: support-assistant
 
+minio:
+  url: ${MINIO_URL:http://localhost:9000}
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin}
+  bucket: ${MINIO_BUCKET:dog-profiles}
+
 langfuse:
   url: http://localhost:3000
   public_key: test-public-key
