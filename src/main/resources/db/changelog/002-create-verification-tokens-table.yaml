@@ -1,0 +1,51 @@
+databaseChangeLog:
+  - changeSet:
+      id: 002-create-verification-tokens-table
+      author: tinder4dogs
+      changes:
+        - createTable:
+            tableName: verification_tokens
+            columns:
+              - column:
+                  name: token
+                  type: VARCHAR(128)
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: owner_id
+                  type: UUID
+                  constraints:
+                    nullable: false
+                    foreignKeyName: fk_vt_owner
+                    references: owners(id)
+                    deleteCascade: true
+              - column:
+                  name: expires_at
+                  type: TIMESTAMPTZ
+                  constraints:
+                    nullable: false
+              - column:
+                  name: used_at
+                  type: TIMESTAMPTZ
+        - createIndex:
+            indexName: idx_vt_owner
+            tableName: verification_tokens
+            columns:
+              - column:
+                  name: owner_id
+        - createIndex:
+            indexName: idx_vt_expires
+            tableName: verification_tokens
+            columns:
+              - column:
+                  name: expires_at
+      rollback:
+        - dropIndex:
+            indexName: idx_vt_expires
+            tableName: verification_tokens
+        - dropIndex:
+            indexName: idx_vt_owner
+            tableName: verification_tokens
+        - dropTable:
+            tableName: verification_tokens

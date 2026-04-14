@@ -1,0 +1,92 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001-create-owners-table
+      author: tinder4dogs
+      changes:
+        - createTable:
+            tableName: owners
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  defaultValueComputed: gen_random_uuid()
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: email
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uq_owners_email
+              - column:
+                  name: password_hash
+                  type: VARCHAR(60)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: name
+                  type: VARCHAR(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: photo_path
+                  type: VARCHAR(500)
+              - column:
+                  name: location_city
+                  type: VARCHAR(100)
+              - column:
+                  name: location_country
+                  type: VARCHAR(100)
+              - column:
+                  name: location_latitude
+                  type: DOUBLE PRECISION
+              - column:
+                  name: location_longitude
+                  type: DOUBLE PRECISION
+              - column:
+                  name: location_consent_given
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: VARCHAR(30)
+                  defaultValue: PENDING_VERIFICATION
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMPTZ
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMPTZ
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - createIndex:
+            indexName: idx_owners_email
+            tableName: owners
+            columns:
+              - column:
+                  name: email
+        - createIndex:
+            indexName: idx_owners_status
+            tableName: owners
+            columns:
+              - column:
+                  name: status
+      rollback:
+        - dropIndex:
+            indexName: idx_owners_status
+            tableName: owners
+        - dropIndex:
+            indexName: idx_owners_email
+            tableName: owners
+        - dropTable:
+            tableName: owners
