@@ -1,7 +1,7 @@
 # Implementation Plan
 
 - [ ] 1. Set up project infrastructure for the dog profile feature
-- [ ] 1.1 Add new Maven dependencies and enable async event dispatching <!-- gh:#2 -->
+- [x] 1.1 Add new Maven dependencies and enable async event dispatching <!-- gh:#2 -->
   - Add `spring-boot-starter-security` and AWS SDK v2 `s3` artifact to `pom.xml`
   - Add an `AsyncConfig` class annotated `@EnableAsync` so Spring can dispatch domain events off the calling thread
   - Verify the project still compiles and all existing tests pass after the dependency additions
