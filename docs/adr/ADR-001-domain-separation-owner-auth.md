@@ -1,0 +1,19 @@
+- **Status**: Proposed
+- **Context**: No authentication layer exists in PawMatch. Introducing registration requires handling both a domain entity (`Owner` aggregate with name, photo, and location) and security infrastructure (JWT, email verification, rate limiting, reCAPTCHA). These two concerns have different change drivers: security evolves in response to compliance requirements and attack surfaces; the domain evolves in response to product features.
+- **Decision**: Split into two domain packages — `auth/` owns all security infrastructure (JWT lifecycle, email verification, rate limiting, reCAPTCHA); `owner/` owns the `Owner` aggregate and profile management. The `auth/` package reads owner data exclusively via an `OwnerService` interface, never directly from the JPA repository.
+  - `auth/` depends on `owner/` through a service interface only — no JPA entities or repositories leak across the boundary.
+  - `owner/` has zero dependency on `auth/`.
+  - `JwtAuthFilter` (in `auth/config/`) populates `SecurityContextHolder` before any controller is invoked; no `@PreAuthorize` annotations are used to preserve Kotlin coroutine context.
+- **Consequences**:
+  - ✔ Security infrastructure (`auth/`) can adopt OAuth/social login in v2 without modifying domain entities or the `owner/` package.
+  - ✔ `owner/` domain tests have no Spring Security dependency on their classpath — full unit tests run without a security context.
+  - ✔ Consistent with the project's domain-first structure (`match/`, `support/`) documented in `steering/structure.md` — zero onboarding friction for developers familiar with the existing codebase.
+  - ✘ One cross-domain interface (`OwnerService`) must be maintained; every new `Owner` field required by auth logic (e.g., a `roles` claim) forces a co-ordinated change to the interface and its implementation.
+  - ✘ The domain boundary is not enforced at compile time; a developer could add a direct `OwnerRepository` import inside `auth/` without a build failure — enforced by code review only in v1.
+- **Alternatives**:
+  - Single `registration/` domain — rejected because it conflates domain data (owner name, photo, location) with security logic (JWT, rate limiting), preventing independent evolution and violating the project's domain-first principle.
+  - Hexagonal architecture (ports & adapters) — rejected for v1 because it adds ~12 adapter source files and introduces a second structural paradigm with no immediate swappability benefit given a single DB, mail provider, and reCAPTCHA provider.
+  - Monolithic `security/` module — rejected because owner profile data would live inside the security package, making product-feature changes (e.g., adding a `bio` field) trigger security-package reviews and blocking v2 OAuth adoption without a large refactor.
+- **References**:
+  - `.kiro/specs/registration-owner-profile/requirements.md` — NFR-REG-01, NFR-REG-02
+  - `.kiro/specs/registration-owner-profile/research.md` — Architecture Pattern Evaluation, Decision: Two New Domains

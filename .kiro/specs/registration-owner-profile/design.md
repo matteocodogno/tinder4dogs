@@ -485,6 +485,75 @@ sealed class RecaptchaResult {
 
 ---
 
+#### EmailVerificationService
+
+| Field | Detail |
+|-------|--------|
+| Intent | Manage secure verification token lifecycle and dispatch verification emails |
+| Requirements | 2.2, 2.3, 2.4, 2.5 |
+
+**Responsibilities & Constraints**
+- Owns the `VerificationToken` aggregate: creation, consumption, expiry, and resend.
+- Generates 64-char cryptographically secure random hex tokens via `SecureRandom`.
+- Persists at most one active (non-expired, non-consumed) token per owner; invalidates the previous token on resend.
+- Email dispatch is asynchronous (`withContext(Dispatchers.IO)`) to stay within the 5-second SLA without blocking the request thread.
+
+**Dependencies**
+- Inbound: `RegistrationService` — request token creation + email dispatch after account creation (P0).
+- Inbound: `AuthService` — token consumption for verification + resend requests (P0).
+- Outbound: `VerificationTokenRepository` — token CRUD (P0).
+- Outbound: `JavaMailSender` — SMTP email dispatch (P1; failure does not abort registration).
+
+**Contracts**: Service [x]
+
+##### Service Interface
+
+```kotlin
+interface EmailVerificationService {
+    suspend fun createAndSend(owner: Owner): Unit
+    suspend fun verify(token: String): VerificationResult
+    suspend fun resend(ownerId: UUID): Unit
+}
+```
+
+- Preconditions: `owner.email` is non-blank and `owner.status == PENDING_VERIFICATION` for `createAndSend`.
+- Postconditions on `createAndSend`: `VerificationToken` row with `expiresAt = now + 72h` exists; email dispatched within 5 seconds.
+- Invariants: `verify` marks `used_at` before transitioning owner status; SMTP failure does not roll back token creation.
+
+**Implementation Notes**
+- Integration: SMTP credentials sourced from `spring.mail.*` environment variables via `JavaMailSenderAutoConfiguration`.
+- Validation: Token lookup uses indexed PK; `used_at IS NULL AND expires_at > now()` check enforces single-use and TTL.
+- Risks: SMTP server failure — non-fatal; logged at WARN; owner can request resend from "Check your email" screen.
+
+---
+
+#### LoginAttemptService
+
+| Field | Detail |
+|-------|--------|
+| Intent | Write structured login-attempt audit log entries without storing PII |
+| Requirements | 5.1, 5.2, 5.3 |
+
+**Contracts**: Service [x]
+
+##### Service Interface
+
+```kotlin
+interface LoginAttemptService {
+    fun log(ipAddress: String, outcome: LoginOutcome, reason: LoginFailureReason?): Unit
+}
+
+enum class LoginOutcome { SUCCESS, FAILURE }
+enum class LoginFailureReason { INVALID_PASSWORD, UNVERIFIED_ACCOUNT, ACCOUNT_NOT_FOUND }
+```
+
+- Each call writes one structured log entry via `KotlinLogging` at `INFO` (SUCCESS) or `WARN` (FAILURE) level.
+- Log fields: UTC timestamp, IP (last octet zeroed for IPv4 privacy), outcome, reason code.
+- `log` is synchronous to guarantee no attempt is silently dropped (NFR-REG-10).
+- Plaintext passwords, hashes, and email addresses are never included in any log entry.
+
+---
+
 ### auth / config
 
 #### SecurityConfig
@@ -560,6 +629,64 @@ sealed class PhotoValidationResult {
 - `validate`: Uses Apache Tika to detect actual MIME from magic bytes; rejects if not `image/jpeg`, `image/png`, or `image/webp`. Size is enforced at the Spring multipart layer (`spring.servlet.multipart.max-file-size=5MB`) and double-checked in `validate`.
 - `store`: Persists to `${tinder4dogs.storage.photos-dir}/{ownerId}/profile.{ext}`. Returns a relative path for storage in the DB.
 - The stored path is served via `GET /api/v1/owner/profile/photo` (streaming endpoint, not a static resource URL).
+
+---
+
+#### ProfileService
+
+| Field | Detail |
+|-------|--------|
+| Intent | Validate and persist owner profile updates; enforce location consent and photo rules post-registration |
+| Requirements | 3.1, 3.2, 3.3, 3.4, 3.5 |
+
+**Responsibilities & Constraints**
+- Applies the same validation rules as `RegistrationService`: name mandatory, photo ≤ 5 MB and JPEG/PNG/WebP, location re-consent required when coordinates change.
+- Coordinates are always truncated to the 0.005° grid (≈ 500 m) before persisting.
+- Photo deletion removes the file from the filesystem and clears `owner.photoPath` within the same `@Transactional` boundary.
+
+**Dependencies**
+- Inbound: `OwnerController` (P0).
+- Outbound: `OwnerRepository` — load and save the `Owner` aggregate (P0).
+- Outbound: `PhotoStorageService` — validate, store, and delete photos (P1).
+- Outbound: `LocationService` — truncate coordinates on consent-given updates (P0).
+
+**Contracts**: Service [x]
+
+##### Service Interface
+
+```kotlin
+interface ProfileService {
+    suspend fun getProfile(ownerId: UUID): OwnerProfileResponse
+    suspend fun updateProfile(
+        ownerId: UUID,
+        request: ProfileUpdateRequest,
+        photo: ByteArray?,
+        photoContentType: String?,
+    ): ProfileUpdateResult
+    suspend fun deletePhoto(ownerId: UUID): Unit
+}
+
+data class ProfileUpdateRequest(
+    val name: String,
+    val locationConsent: Boolean,
+    val latitude: Double?,
+    val longitude: Double?,
+)
+
+sealed class ProfileUpdateResult {
+    data class Success(val profile: OwnerProfileResponse) : ProfileUpdateResult()
+    data class ValidationFailed(val violations: List<FieldViolation>) : ProfileUpdateResult()
+}
+```
+
+- Preconditions: `ownerId` resolves to an `ACTIVE` owner; `request.name` is non-blank.
+- Postconditions on `Success`: `Owner` row updated; success notification included in response.
+- Invariants: No coordinate stored when `locationConsent == false`; photo write and DB update are co-ordinated — file cleanup triggered if DB update fails after photo is written.
+
+**Implementation Notes**
+- Integration: Delegates to `PhotoStorageService` and `LocationService`; no new external integrations.
+- Validation: Re-uses the same `FieldViolation` type defined in `RegistrationService`.
+- Risks: Concurrent profile updates from two sessions — last-write-wins (no optimistic locking in v1); acceptable given low concurrent update probability.
 
 ---
 
@@ -810,6 +937,122 @@ All errors are returned as structured JSON: `{ "error": "ERROR_CODE", "message":
 - **GeoLite2 `DatabaseReader`**: thread-safe singleton; lookups are O(log n) in the binary MMDB file; no I/O after initial load.
 - **Photo upload**: multipart parsing is synchronous in Spring MVC; large uploads (up to 5 MB) may delay the registration response — acceptable given the infrequency of registration.
 - **Email dispatch**: sent via `withContext(Dispatchers.IO)` coroutine to avoid blocking the request thread; contributes to the 5-second SLA (NFR-REG-07).
+
+---
+
+## Architecture Options Considered
+
+### Option 1: Domain-First Layered — `owner/` + `auth/` (Selected)
+
+**Advantages:**
+- Extends the existing `match/` and `support/` domain structure directly — zero new patterns for the team to learn.
+- `auth/` and `owner/` have orthogonal change drivers (security vs. product features), so each is versioned and tested independently without risking regressions in the other.
+- The `OwnerService` interface mediates the one cross-domain dependency, keeping `auth/` free of JPA annotations and preventing a future `owner/` migration from cascading into security code.
+
+**Disadvantages:**
+- One cross-domain interface (`auth/` → `OwnerService`) must be kept synchronized; adding a new `Owner` field required by auth (e.g., `roles` claim) forces a two-file change.
+- The domain boundary is invisible from the package structure alone — a developer unfamiliar with the project may add a direct `OwnerRepository` reference inside `auth/`.
+- Does not provide the adapter isolation needed for a future microservices extraction without further refactoring.
+
+---
+
+### Option 2: Hexagonal Architecture (Ports & Adapters)
+
+**Advantages:**
+- The `Owner` aggregate is free of Spring annotations; domain logic is unit-testable without a Spring context, cutting test startup time to near zero.
+- Every external integration (PostgreSQL, SMTP, reCAPTCHA, MaxMind) is behind a port interface — each is independently replaceable without touching domain logic.
+- Enforces dependency inversion at compile time: the domain dictates the shape of its adapters, not the reverse.
+
+**Disadvantages:**
+- Requires building adapter classes for all 6 external integrations, adding approximately 12 additional source files and an estimated 20% delivery overhead for v1.
+- No hexagonal patterns exist in the codebase today; introduces a second structural paradigm alongside the layered approach used by `match/` and `support/`, raising cognitive load for the entire team.
+- Adapter swappability has low near-term value: there is one DB, one mail provider, and one reCAPTCHA provider in v1; the cost is paid now while the return accrues hypothetically.
+
+---
+
+### Option 3: Monolithic Security Module (`security/`)
+
+**Advantages:**
+- Single package contains authentication, token, `Owner` entity, and profile logic — trivially searchable by a new developer.
+- No cross-package imports; `security/` is self-contained with a single dependency on the shared `ai/` infrastructure.
+- Fewer files to navigate during debugging of end-to-end authentication flows.
+
+**Disadvantages:**
+- Couples the `Owner` domain entity to security infrastructure: adding a product field (e.g., `bio`) requires touching a security-focused package, triggering unrelated code review and test churn.
+- When social login (OAuth) is added in v2, the `Owner` aggregate must be refactored out of the security module to support the new identity source — a multi-PR breaking change.
+- Contradicts the domain-first structure documented in `steering/structure.md`, creating an inconsistency that increases onboarding friction.
+
+---
+
+**Recommendation:** Option 1 (Domain-First Layered) — maintains architectural consistency with the existing codebase at no added complexity; the `OwnerService` interface keeps the one required cross-domain dependency explicit and auditable. Option 2 is the correct long-term target but adds unjustifiable boilerplate for a v1 single-instance monolith. Option 3 is rejected because it conflates domain and security concerns in a way that blocks v2 extensibility.
+
+---
+
+## Architecture Decision Record
+
+See: `docs/adr/ADR-001-domain-separation-owner-auth.md`
+
+---
+
+## Corner Cases
+
+### Input boundary cases
+
+| Scenario | Expected Behaviour | Req |
+|----------|-------------------|-----|
+| Email at maximum RFC 5321 length (254 chars) | Accepted if syntactically valid and unique; stored without truncation | 1.3 |
+| Password > 72 chars (BCrypt truncation boundary) | Accepted; BCrypt hashes only the first 72 bytes — API documentation must note this cap | 1.3 |
+| Two simultaneous POST /register with the same email | First insert succeeds (`PENDING_VERIFICATION`); second receives `DataIntegrityViolationException` on the `UNIQUE` constraint, caught and returned as `Forbidden` (generic, no account existence disclosed) | 1.4 |
+| Photo with `.jpg` extension but PNG magic bytes | Apache Tika detects actual MIME from bytes; file accepted and stored as `image/png`; extension mismatch is harmless | 1.6, 1.7 |
+| Photo payload exactly 5,242,880 bytes (5 MiB) | Accepted; 5,242,881 bytes rejected with `PHOTO_INVALID` | 1.6, 1.7 |
+| `name` field containing only whitespace | Rejected by `@NotBlank`; per-field violation returned without reaching the DB | 1.3 |
+| `latitude` provided but `locationConsent = false` | Coordinates silently ignored; city derived from IP only | 1.8 |
+| Malformed JSON in the multipart `data` part | Spring `HttpMessageNotReadableException` mapped to 400 `VALIDATION_FAILED` before any service call | 1.1 |
+| Honeypot field populated | `RegistrationService` rejects before reCAPTCHA call; `BotDetected` result → 422 | 4.1 |
+
+### State & timing edge cases
+
+| Scenario | Expected Behaviour | Req |
+|----------|-------------------|-----|
+| Verification link clicked at the exact 72-hour boundary | `expires_at < now()` check marks token expired; user sees expiry message and resend link | 2.3 |
+| Resend request while a non-expired token already exists | Existing token's `used_at` set to `now()`; new 72-hour token issued; old link is dead on next click | 2.3, 2.4 |
+| Login while account transitions PENDING → ACTIVE concurrently | JWT embeds status at issuance; a PENDING token issued seconds before email verification is valid ≤ 1 h but blocked by `JwtAuthFilter`; next login produces an ACTIVE token | 2.1, 2.2 |
+| Concurrent profile updates from two browser tabs | `@Transactional` on `ProfileService.updateProfile` serialises writes; last-write-wins — acceptable in v1 (no optimistic locking) | 3.2 |
+| Server restart mid-registration (after photo write, before DB commit) | Photo file is orphaned on disk; no `Owner` row exists so the user re-registers; orphan cleanup is a future maintenance task | 1.2 |
+| Rate-limit in-memory state lost on server restart | Fibonacci breach counters reset to zero; IP can immediately make 5 new attempts — acceptable for v1 single instance | 4.2 |
+
+### Integration failure modes
+
+| Dependency | Failure Mode | Behaviour | Req |
+|-----------|-------------|-----------|-----|
+| Google reCAPTCHA API — timeout or 5xx | `RecaptchaService` returns `Error`; fail-closed default rejects registration with 503 `SERVICE_UNAVAILABLE` | 4.1 |
+| SMTP server — connection refused or timeout | `EmailVerificationService.createAndSend` logs at WARN; registration returns 201 anyway; owner resends from "Check your email" screen | 1.10, 2.3 |
+| PostgreSQL — connection pool exhausted | `DataAccessException` propagates; controller catches and maps to 500 `INTERNAL_ERROR`; trace ID in response for operator correlation | All |
+| MaxMind GeoLite2 — private/loopback IP | `AddressNotFoundException` caught in `LocationService`; `OwnerLocation(city="Unknown")` returned; registration is never blocked | 1.9 |
+| MaxMind GeoLite2 — `.mmdb` file absent from classpath | `DatabaseReader` bean creation throws `IOException`; `ApplicationContext` fails to start; startup log contains file path and cause | 1.9 |
+| Bucket4j in-memory map under extreme IP cardinality (DDoS) | `ConcurrentHashMap` grows unbounded; heap pressure → OOM risk; not mitigated in v1 — Redis-backed `ProxyManager` required before production scale | 4.2 |
+
+### Security edge cases
+
+| Scenario | Expected Behaviour | Req |
+|----------|-------------------|-----|
+| JWT with forged `status` claim (PENDING → ACTIVE) | Nimbus signature verification fails; `JwtAuthFilter` returns 401 | 2.1 |
+| JWT with `exp` set far in the future | `JWTClaimsSet` validates `exp` during parsing; rejected as invalid | 2.1 |
+| Refresh token replayed after explicit logout | `revokedAt != null` detected in `RefreshTokenRepository`; rejected with `TOKEN_INVALID` | 2.1 |
+| Verification token reused after `used_at` is set | `used_at != null` returns `TokenNotFound` — same response as a never-issued token; constant-time semantics prevent existence inference | 2.4 |
+| Login timing attack to confirm account existence | Dummy BCrypt hash always computed even for unknown emails; response time is uniform (~300 ms) regardless of path | 1.4, 4.4 |
+| Password value logged by Spring HTTP access log | `CommonsRequestLoggingFilter` is not activated; request body is never written to logs — enforced by absence of the bean definition | 4.4 |
+| Coordinate precision leaked via API response | `OwnerProfileResponse.location` exposes only city and country strings plus `consentGiven`; latitude/longitude are never included in any response payload | 3.3, NFR-REG-03 |
+
+### Data edge cases
+
+| Scenario | Expected Behaviour | Req |
+|----------|-------------------|-----|
+| `verification_tokens` table growth from unverified accounts never completing | Expired rows accumulate; queries filter on `expires_at > now() AND used_at IS NULL` via `idx_vt_expires` — read performance unaffected; cleanup job deferred to v2 | 2.3 |
+| `owners` table at 1 M rows — email uniqueness check | `UNIQUE` index on `owners.email` provides O(log n) lookup; no degradation expected | 1.3 |
+| GDPR erasure request with outstanding sessions | `ON DELETE CASCADE` on `verification_tokens.owner_id` and `refresh_tokens.owner_id` removes all associated rows atomically; photo file deletion is a separate imperative step (no DB CASCADE) | NFR-REG-02 |
+| GeoLite2 database older than 30 days in production | Startup warning logged at > 25 days; accuracy degrades silently; MaxMind EULA breach is a legal risk — operational runbook must include a monthly refresh reminder | 1.9 |
+| `password_hash` column width mismatch on algorithm upgrade | BCrypt output is always 60 chars; Argon2id output is up to 95 chars; a `VARCHAR(128)` column migration via Liquibase is required before any algorithm change is deployed | 4.5 |
 
 ---
 
