@@ -180,3 +180,38 @@ graph TB
 ❌ Tight coupling between components
 ❌ Missing data consistency strategy
 ❌ Incomplete dependency analysis
+
+---
+
+## Architecture Evaluation
+Before proposing a design, evaluate at least 3 architectures that
+could satisfy the same requirements:
+- For each: list exactly 3 advantages and 3 disadvantages
+  given the stated constraints — no generic trade-offs
+- State which you recommend and why — be specific
+- Do NOT recommend a pattern without explaining what it costs
+- Every consequence must be measurable or observable
+  (never write "increases complexity" without quantifying it)
+
+## Architecture Decision Record
+For the most significant architectural choice, produce an ADR.
+
+### Decision context
+- System: [name and brief description]
+- Problem: [what architectural problem needs solving]
+- Constraints: [team size, budget, performance targets, regulatory]
+- Option chosen: [the decision made]
+- Alternatives considered: [what else was evaluated]
+- NFRs affected: [list relevant NFR IDs from requirements.md]
+
+→ For the exact ADR output format, follow the template in:
+  .kiro/settings/templates/specs/research.md  (## ADR Format section)
+
+## Corner Cases
+After the architecture is chosen, identify system-level corner cases
+and include a ## Corner Cases section in design.md.
+The full list of categories and output format is defined in:
+  .kiro/settings/rules/design-discovery-full.md
+
+→ For the Sequence Diagram scaffold, follow the template in:
+  .kiro/settings/templates/specs/design.md  (## Sequence Diagram section)
