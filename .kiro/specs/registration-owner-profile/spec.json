@@ -1,20 +1,20 @@
 {
   "feature_name": "registration-owner-profile",
   "created_at": "2026-04-08T00:00:00Z",
-  "updated_at": "2026-04-08T16:40:00Z",
+  "updated_at": "2026-04-08T18:00:00Z",
   "language": "en",
-  "phase": "requirements-generated",
+  "phase": "tasks-generated",
   "approvals": {
     "requirements": {
       "generated": true,
-      "approved": false
+      "approved": true
     },
     "design": {
-      "generated": false,
-      "approved": false
+      "generated": true,
+      "approved": true
     },
     "tasks": {
-      "generated": false,
+      "generated": true,
       "approved": false
     }
   },
