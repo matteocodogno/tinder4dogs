@@ -9,7 +9,7 @@
   - Add Liquibase core and configure it as the schema migration tool; disable Hibernate DDL auto-update
   - _Requirements: 7.1, 8.1_
 
-- [ ] 1.2 Create Liquibase migration for the chat database schema <!-- gh:#37 -->
+- [x] 1.2 Create Liquibase migration for the chat database schema <!-- gh:#37 -->
   - Define the `chat_thread` table: UUID primary key, unique match reference, two participant owner ID columns, last-message preview (up to 100 characters), last-message timestamp, and creation timestamp
   - Define the `chat_message` table: UUID primary key, foreign key to `chat_thread` with cascade delete, sender owner ID, content column capped at 2,000 characters, and sent-at timestamp
   - Add indexes on the match reference and both owner ID columns of `chat_thread`; add a composite `(thread_id, sent_at ASC)` index on `chat_message` for efficient paginated history queries
