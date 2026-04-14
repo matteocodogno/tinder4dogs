@@ -1,7 +1,7 @@
 # Implementation Plan
 
 - [ ] 1. Set up project dependencies and database schema <!-- gh:#28 -->
-- [ ] 1.1 Add required Maven dependencies <!-- gh:#36 -->
+- [x] 1.1 Add required Maven dependencies <!-- gh:#36 -->
   - Add the WebSocket/STOMP starter to enable real-time messaging infrastructure
   - Add the Spring Security starter for JWT-based HTTP authentication
   - Add the Auth0 Java JWT library for token signature verification and claims extraction
