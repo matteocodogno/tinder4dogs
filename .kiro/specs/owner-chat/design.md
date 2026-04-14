@@ -116,7 +116,7 @@ graph TB
 | Backend | Spring Boot 4.0.4 / Spring Framework 7 | Hosts all chat endpoints | Existing; no change |
 | Real-time | spring-boot-starter-websocket (STOMP) | Bidirectional WebSocket messaging | New dependency |
 | Security | spring-boot-starter-security + auth0 java-jwt 4.x | JWT validation on HTTP filter chain and STOMP CONNECT | First security dependency in project |
-| Rate limiting | Bucket4j 8.17.0 core | Per-owner token-bucket rate limiting | `bucket4j-spring-boot-starter` 0.14.0; see research.md |
+| Rate limiting | Bucket4j 8.17.0 core | Per-owner token-bucket rate limiting | In-memory `ConcurrentHashMap<UUID, Bucket>`; see research.md |
 | Persistence | PostgreSQL + Spring Data JPA | `chat_thread` and `chat_message` tables | First `@Entity` usage in project |
 | DB migrations | Liquibase | Schema versioning with rollback | First Liquibase adoption; replaces `ddl-auto: update` for chat |
 | Serialization | tools.jackson (Jackson 3, existing) | STOMP message serialization | Jackson 2 dependency in pom.xml is a pre-existing risk; see research.md |
@@ -158,7 +158,7 @@ sequenceDiagram
     end
 ```
 
-Key decisions: message is persisted before the STOMP push is dispatched (satisfies NFR-C07); if the recipient is offline the message remains in history (satisfies 7.5).
+Message is persisted before the STOMP push is dispatched (satisfies NFR-C07); if the recipient is offline the message remains in history (satisfies 7.5).
 
 ### Unmatch — Thread Deletion
 
@@ -183,7 +183,7 @@ Deletion is atomic within a single transaction. `ON DELETE CASCADE` on `chat_mes
 ### Summary Table
 
 | Component | Layer | Intent | Req Coverage | Key Dependencies | Contracts |
-|-----------|-------|--------|--------------|------------------|-----------|
+|-----------|-------|--------|--------------|------------------|----------|
 | `ChatController` | presentation | REST inbox + history | 4, 6, 8 | `ChatService` (P0) | API |
 | `ChatWebSocketController` | presentation | STOMP send/receive | 7, 3, 2, 1, 8 | `ChatService` (P0), `RateLimitService` (P0), `SimpMessagingTemplate` (P0) | API, Event |
 | `JwtChannelInterceptor` | config/security | Authenticate STOMP CONNECT | 7.2, 7.3, 8.1 | JWT library (P0) | Service |
@@ -209,7 +209,7 @@ Deletion is atomic within a single transaction. `ON DELETE CASCADE` on `chat_mes
 - Owns the `ChatThread` and `ChatMessage` aggregate
 - Enforces participant access invariant before every read/write operation
 - Is the sole caller of `SimpMessagingTemplate` for outbound WebSocket push
-- `createThread` and `deleteThread` are called only by `MatchService`; all other methods are called by presentation layer
+- `createThread` and `deleteThread` are called only by `MatchService`; all other methods are called by the presentation layer
 
 **Dependencies**
 - Outbound: `ChatThreadRepository` — thread CRUD (P0)
@@ -359,7 +359,7 @@ data class RateLimitExceededException(val retryAfterMs: Long) : RuntimeException
 **Contracts**: Service [x]
 
 **Implementation Notes**
-- Integration: must be registered in `WebSocketSecurityConfig` without `@EnableWebSocketSecurity` (CSRF must be off for stateless JWT)
+- Must be registered in `WebSocketSecurityConfig` without `@EnableWebSocketSecurity` (CSRF must be off for stateless JWT)
 - Risk: Jackson dual-version conflict in pom.xml may surface as STOMP serialization failures at runtime; see research.md
 
 #### WebSocketConfig
@@ -461,7 +461,7 @@ Validation at REST boundary (Spring Validation):
 - `matchId` — valid UUID format
 - `page` ≥ 0, `size` 1–100 (default 50)
 
-**STOMP Payloads**: serialized as JSON via Jackson 3's STOMP message converter. `SendMessageCommand.content` validated in `ChatWebSocketController` before `ChatService` call (blank check deferred to service).
+**STOMP Payloads**: serialized as JSON via Jackson 3's STOMP message converter. `SendMessageCommand.content` validated in `ChatWebSocketController` before `ChatService` call.
 
 ---
 
@@ -495,7 +495,7 @@ Validate at the controller/interceptor boundary; throw domain exceptions from `C
 
 ### Unit Tests
 
-- `ChatService`: access control (`validateAccess` — participant vs non-participant), `sendMessage` content validation (blank, exactly 2000 chars, 2001 chars), `deleteThread` cascading behaviour
+- `ChatService`: access control (`validateAccess` — participant vs non-participant), `sendMessage` content validation (blank, exactly 2,000 chars, 2,001 chars), `deleteThread` cascading behaviour
 - `RateLimitService`: token consumed successfully within limit; `RateLimitExceededException` thrown when bucket exhausted; bucket refills after window
 
 ### Integration Tests
@@ -525,11 +525,110 @@ Validate at the controller/interceptor boundary; throw domain exceptions from `C
 - **Participant check in service layer**: `ChatService` re-verifies ownership on every read/write, independently of the controller. Protects against accidental future refactoring that bypasses controller-level guards.
 - **Message content never logged**: trace IDs reference internal request context only; no message body in any log statement.
 - **No CSRF for WebSocket**: CSRF explicitly disabled for the stateless JWT flow; see research.md for Spring Security issue context.
-- **Existing endpoints unprotected during transition**: `permit` rules in `SecurityConfig` for `support` and `matches` endpoints until those domains add auth — document as technical debt.
+- **Existing endpoints unprotected during transition**: `permit` rules in `SecurityConfig` for `support` and `matches` endpoints until those domains add auth — documented as technical debt.
 
 ## Performance & Scalability
 
 - **Inbox query**: uses indexed columns `owner_a_id` / `owner_b_id`; sorted by `last_message_at` (not a full table scan)
-- **History query**: `(thread_id, sent_at ASC)` composite index makes keyset pagination efficient; default page size 50 avoids large result sets
+- **History query**: `(thread_id, sent_at ASC)` composite index makes paginated queries efficient; default page size 50 avoids large result sets
 - **In-memory STOMP broker**: sufficient for single-node v1; upgrade path to RabbitMQ STOMP relay requires adding `configureMessageBroker` relay config only — no controller or service changes
 - **Bucket4j in-memory**: acceptable for single node; upgrade to Redis-backed buckets via same API if multi-node rate limiting is needed
+
+---
+
+## Architecture Options Considered
+
+### Option 1: STOMP over WebSocket (selected)
+
+**Advantages:**
+1. `SimpMessagingTemplate.convertAndSendToUser()` delivers messages to a specific owner's session without any bespoke routing code, eliminating approximately 300 lines of custom session-registry and dispatcher logic.
+2. The in-memory broker can be replaced with a RabbitMQ STOMP relay by changing two lines in `WebSocketConfig`; `ChatWebSocketController` and `ChatService` require zero modifications to achieve horizontal scale.
+3. Structured STOMP frames carry destination headers, enabling the `/user/queue/messages` (delivery) vs `/user/queue/errors` (error feedback) split without a custom sub-protocol.
+
+**Disadvantages:**
+1. Browser clients must include a STOMP library (e.g., `@stomp/stompjs`, ≥ 40 KB minified) — no native browser STOMP support exists.
+2. JWT authentication on the STOMP CONNECT frame requires a `ChannelInterceptor` ordered ahead of Spring Security interceptors; `@EnableWebSocketSecurity` must be disabled for stateless JWT flows — a non-obvious setup prone to mis-configuration.
+3. STOMP protocol overhead per frame (destination header, content-type header, heartbeat frames) adds approximately 100–200 bytes per message compared to raw WebSocket.
+
+### Option 2: Raw WebSocket
+
+**Advantages:**
+1. No STOMP dependency; classpath footprint is limited to the Tomcat WebSocket API already present in `spring-boot-starter-web`.
+2. Wire format is fully controlled — binary framing (e.g., MessagePack) is trivially adoptable if bandwidth optimisation becomes a priority.
+3. Authentication can be handled entirely at the HTTP upgrade handshake via `HandshakeInterceptor`, keeping security concerns at a single entry point.
+
+**Disadvantages:**
+1. Per-user routing must be implemented from scratch: a `ConcurrentHashMap<UUID, WebSocketSession>` must be maintained and kept consistent with disconnection events — estimated 300+ lines of custom infrastructure code.
+2. Horizontal scaling requires adding Redis pub/sub or a custom message queue layer, with changes propagating into the dispatcher and potentially into `ChatService`.
+3. STOMP's built-in user-destination namespace is unavailable; distinguishing delivery queues from error queues requires designing a custom message type discriminator embedded in each frame payload.
+
+### Option 3: SSE + REST (hybrid)
+
+**Advantages:**
+1. SSE operates over standard HTTP/1.1 and traverses corporate proxies without WebSocket upgrade negotiation — eliminates firewall compatibility issues.
+2. Spring MVC's `SseEmitter` is simpler to configure than `WebSocketConfig` + `JwtChannelInterceptor` + STOMP broker; no custom interceptor chain is required.
+3. Message sends via REST POST are idempotent-friendly and testable with standard HTTP tooling (`MockMvc`), requiring no STOMP client in tests.
+
+**Disadvantages:**
+1. SSE is server-to-client only (unidirectional); message sends use a separate REST POST, creating two distinct connection and authentication paths that must both be maintained and secured.
+2. Requirement 7.6 explicitly prohibits SSE as the real-time channel for v1 — this option is directly non-compliant with a P0 constraint.
+3. Under Tomcat's default thread-per-request model, each long-lived SSE response occupies a thread; at the default pool size of ~200 threads, concurrent active chat sessions are capped at ~200 before the server becomes unresponsive to new requests.
+
+**Recommendation:** Option 1 (STOMP over WebSocket) — the only option that satisfies Req 7.4 (bidirectional messaging) and Req 7.6 (no SSE) simultaneously, while providing an upgrade path to distributed messaging that requires zero controller or service changes.
+
+---
+
+## Architecture Decision Record
+
+See: `docs/adr/ADR-001-stomp-websocket-realtime-messaging.md`
+
+---
+
+## Corner Cases
+
+### Input boundary cases
+
+| Scenario | Expected Behaviour | Req Coverage |
+|----------|--------------------|-------------|
+| `content` is blank or whitespace-only | `ChatService` rejects before DB write; `ErrorEvent(code=VALIDATION_ERROR)` sent to sender | 2.3 |
+| `content` is exactly 2,000 characters | Accepted, persisted, and pushed — at the hard limit boundary | 2.4 |
+| `content` is 2,001 characters | Rejected before DB write; `ErrorEvent(code=VALIDATION_ERROR)` sent to sender | 2.4 |
+| `matchId` is null or not a valid UUID in `SendMessageCommand` | STOMP message deserialisation fails before `ChatWebSocketController` is reached; Spring issues a WS error frame | 1.1 |
+| Two concurrent SEND frames from the same owner before first DB write completes | Both independently consume a rate-limit token; each issues a separate DB `INSERT` with distinct UUID primary keys; ordering determined by `sent_at` | 2.5, 3.1 |
+
+### State & timing edge cases
+
+| Scenario | Expected Behaviour | Req Coverage |
+|----------|--------------------|-------------|
+| Unmatch commits after `validateAccess()` passes but before `INSERT chat_message` | FK violation (`chat_message.thread_id` references deleted `chat_thread`); caught as `DataIntegrityViolationException`; mapped to 404 / STOMP `ErrorEvent` | 1.3, 5.1 |
+| Owner disconnects after DB `INSERT` but before STOMP push dispatches | Message is durably persisted (NFR-C07 satisfied); `SimpMessagingTemplate` logs a warning for the disconnected session; recipient push is unaffected if recipient is connected | 7.5, NFR-C07, NFR-C08 |
+| Two application nodes assign `sent_at` within the same millisecond | Messages within the same millisecond have non-deterministic order in history query; v1 is single-node so this is a dormant risk — documented as a multi-node concern | 4.1 |
+| Application restarts during peak usage | In-memory Bucket4j buckets reset; affected owners receive a brief fresh window (≤ 60 s of extra capacity); rate-limit state is not a security-critical invariant for v1 | 3.3, NFR-C11 |
+
+### Integration failure modes
+
+| Dependency | Failure Mode | Expected Behaviour | Req Coverage |
+|------------|-------------|---------------------|-------------|
+| PostgreSQL unavailable | `DataAccessException` on `chatMessageRepository.save()` | 500 / `ErrorEvent(code=INTERNAL_ERROR)` to sender; trace ID logged; recipient receives no push (persist-before-push maintained) | NFR-C07, 8.5 |
+| PostgreSQL slow (p95 > 200 ms) | `sendMessage()` blocks beyond NFR-C01 threshold | Owner ACK is delayed; no circuit breaker in v1; Spring Boot Actuator metrics expose degradation for alerting | NFR-C01 |
+| STOMP push fails (session evicted) | `SimpMessagingTemplate.convertAndSendToUser()` throws | Exception caught silently; DB transaction is NOT rolled back — message remains in history | 7.5, NFR-C08 |
+| Bucket4j `ConcurrentHashMap` grows unboundedly | Memory pressure as unique owner count grows | Acceptable for v1; documented upgrade path to Caffeine-backed eviction without API change | 3.4 |
+
+### Security edge cases
+
+| Scenario | Expected Behaviour | Req Coverage |
+|----------|--------------------|-------------|
+| Expired JWT on STOMP CONNECT | `JwtChannelInterceptor` rejects; WS connection closed with code 4001 | 7.3, 8.2 |
+| JWT expires mid-session (after valid CONNECT) | Session remains live; subsequent SEND frames are not re-validated. Client must reconnect with a refreshed token. Documented as v1 technical debt. | 7.2, 8.1 |
+| Owner guesses a `matchId` they do not participate in | `ChatService.validateAccess()` throws `AccessDeniedException` (403 / STOMP `ACCESS_DENIED`); check is in the service layer, independent of the controller | 1.4, 1.5, 8.3 |
+| STOMP SEND to an unregistered destination | Spring STOMP dispatcher rejects with `MessageDeliveryException` before business logic is reached | 8.1 |
+| Raw HTML/script injection in message content | API stores and returns content as-is; HTML escaping is the client rendering layer's responsibility; API contract documents content as untrusted | 8.4 |
+
+### Data edge cases
+
+| Scenario | Expected Behaviour | Req Coverage |
+|----------|--------------------|-------------|
+| Owner has no active matches (empty inbox) | `ChatService.getInbox()` returns `emptyList()`; HTTP 200 with empty array | 6.4 |
+| Thread exists but contains no messages | Inbox entry returned with `lastMessagePreview = null`, `lastMessageAt = null`; history endpoint returns empty page with HTTP 200 | 6.5, 4.1 |
+| Message history at 10× current load | The `(thread_id, sent_at ASC)` composite index enables an index scan (O(log n + page_size)); NFR-C02 target must be validated via `EXPLAIN ANALYZE` under load | NFR-C02, NFR-C06 |
+| Unmatch commits while pagination is in flight | Next page request finds no thread; HTTP 404 returned; no partial or residual message data exposed (hard delete, no soft-delete residue) | 5.3, 5.4 |
