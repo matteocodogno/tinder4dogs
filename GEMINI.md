@@ -28,7 +28,12 @@
 - **Scope:** Task ID or module name (e.g., `feat(task-7):` or `fix(auth):`)
 - **Description:** Imperative, lowercase, no period, max 72 chars.
 - **Breaking Changes:** Include `BREAKING CHANGE:` in the footer.
-- **Rule:** Never use generic messages like "fix bug" or "update code". Use the `git-commit` skill for intelligent generation.
+- **Examples:**
+  - `feat(stripe): add webhook signature validation`
+  - `fix(auth): handle 401 on token refresh`
+  - `test(pdf): add export edge case coverage`
+  - `chore(deps): upgrade stripe-node to v14`
+- **Rule:** Never use generic messages like "fix bug" or "update code".
 
 ## Constraints & "Never Do"
 - Never implement tasks not documented in the specification or `tasks.md`.
@@ -46,25 +51,46 @@
   - Save the issue number as a comment in the task file: `<!-- gh:#42 -->`
 - When starting a task: Add the `in-progress` label.
 - When finishing: Close the issue with `Closes #N` in the commit footer and tick the checkbox.
+- Never close an issue without the corresponding checkbox being ticked first.
+- Never tick a checkbox without closing the issue (keep them atomic).
 
 ---
 
-# Spec-Driven Development (Kiro-style)
+# AI-DLC and Spec-Driven Development
 
-This project follows an AI-DLC (AI Development Life Cycle) approach using Spec-Driven Development.
+Kiro-style Spec Driven Development implementation on AI-DLC (AI Development Life Cycle).
 
 ## Project Context
-- **Steering:** `.kiro/steering/` (Project-wide rules and context).
-- **Specs:** `.kiro/specs/` (Feature-specific formalization).
+- **Steering:** `.kiro/steering/` (Guide AI with project-wide rules and context).
+- **Specs:** `.kiro/specs/` (Formalize development process for individual features).
+
+### Steering vs Specification
+- **Steering:** Global project rules, architectural patterns, and product vision.
+- **Specs:** Feature-specific requirements, design, and implementation tasks.
 
 ## Workflow Guidelines
-- **Target Language:** All Markdown artifacts (requirements, design, tasks, research) must be written in the language specified in `spec.json`.
+- **Target Language:** All Markdown artifacts (requirements, design, tasks, research) MUST be written in the language specified in `spec.json`.
 - **3-Phase Approval:** Requirements → Design → Tasks → Implementation.
 - **Steering Alignment:** Always verify changes against the project steering files (`product.md`, `tech.md`, `structure.md`).
 
-## Available Skills
-Use the specialized OpenSpec skills for the development lifecycle:
-- `openspec-propose`: Quick proposal of new changes.
-- `openspec-explore`: Thinking partner for investigation.
-- `openspec-apply-change`: Implementation of tasks.
-- `openspec-archive-change`: Finalizing and archiving completed changes.
+## Minimal Workflow (Gemini Skills)
+- **Phase 0 (Optional):** Research steering via `read_file` or `grep_search` in `.kiro/steering/`.
+- **Phase 1 (Specification):**
+  - Propose/Init: Use `openspec-propose` skill or manual init in `.kiro/specs/`.
+  - Requirements: Define in `requirements.md`.
+  - Gap Analysis: Validate against existing codebase.
+  - Design: Create `design.md` and validate.
+  - Tasks: Generate `tasks.md` with acceptance criteria.
+- **Phase 2 (Implementation):**
+  - Implementation: Use `openspec-apply-change` to work through tasks.
+  - Validation: Verify implementation against design and steering.
+- **Archive:** Finalize via `openspec-archive-change`.
+
+## Development Rules
+- Human review is required at each phase (Requirements → Design → Tasks).
+- Keep steering current and verify alignment during implementation.
+- Act autonomously within the approved scope: gather context and complete work end-to-end.
+
+## Steering Configuration
+- Default files: `product.md`, `tech.md`, `structure.md`.
+- Custom standards (API, Auth, DB, etc.) are located in `.kiro/settings/templates/steering-custom/`.

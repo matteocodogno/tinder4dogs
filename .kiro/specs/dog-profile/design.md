@@ -81,6 +81,60 @@ New Maven dependencies required (details in implementation task):
 
 ---
 
+## Architecture Options Considered
+
+### Option 1: Layered Domain Module (selected)
+
+**Advantages:**
+1. Directly mirrors the existing `match/` and `support/` domain structure — zero onboarding overhead and no codebase divergence for reviewers.
+2. JPA entities, repositories, and services slot into `dogprofile/` without touching any existing domain or shared global package, keeping blast radius minimal.
+3. Spring's `@Transactional`, Bean Validation, and `@Scheduled` annotations work out-of-the-box; no adapter boilerplate is required to wire the feature end-to-end.
+
+**Disadvantages:**
+1. Business rules (completion evaluation, ownership checks) reside in `DogProfileService` rather than on the aggregate root — domain logic leaks into the service layer (anemic-model risk).
+2. Unit-testing service logic requires a running Spring context or careful manual constructor wiring because domain classes carry JPA annotations.
+3. If the matching feed requires a denormalized read model (e.g., precomputed compatibility scores embedded in the profile), a second read entity must be layered into this same domain package, increasing coupling.
+
+---
+
+### Option 2: Hexagonal (Ports & Adapters)
+
+**Advantages:**
+1. Domain core is fully free of infrastructure annotations; `DogProfileService` is testable with a plain JVM instantiation in milliseconds — no Spring context startup.
+2. Swapping MinIO for AWS S3 in staging or production requires only a new `S3PhotoStorageAdapter` class; no changes to domain or presentation layers.
+3. Inbound and outbound port contracts are explicit, forcing controllers and schedulers to depend on abstractions rather than concrete implementation classes.
+
+**Disadvantages:**
+1. Requires four additional adapter classes for this domain alone (`DogProfilePersistenceAdapter`, `DogPhotoPersistenceAdapter`, `MinioPhotoStorageAdapter`, and an inbound controller adapter) with no hexagonal precedent in the codebase to justify the overhead.
+2. Two developers unfamiliar with ports-and-adapters must ramp up before they can contribute to or review this domain — a measurable onboarding cost for a small team.
+3. Existing controllers use Kotlin `suspend` functions and `RestClient`-based HTTP clients; a hexagonal boundary around a single domain creates an inconsistency that is difficult to enforce across the rest of the codebase.
+
+---
+
+### Option 3: CQRS (Command / Query Responsibility Segregation)
+
+**Advantages:**
+1. A dedicated read model can precompute `completionStatus` and photo counts, eliminating N+1 queries when the matching feed loads hundreds of profiles concurrently.
+2. Separate write and read models let the write side optimize for strong consistency (transactional, normalized) while the read side optimizes for speed (denormalized, potentially cached).
+3. The domain events (`DogProfileUpdatedEvent`, `DogProfileDeletedEvent`) already required for compatibility scoring align naturally with a CQRS event-sourced update pipeline — no additional event infrastructure needed beyond what this design already specifies.
+
+**Disadvantages:**
+1. For a single-entity domain at v1 scale, CQRS adds at least two projections and an event bus with no observable latency benefit — `GET /api/v1/dogs/{id}` meets the 200 ms p95 target (NFR-P01) with a plain indexed PostgreSQL query.
+2. Synchronizing write and read models introduces an eventual consistency window on the profile-completion gate; during that window the matching feed could grant access to an incomplete profile, directly violating requirement 4.2.
+3. No event bus infrastructure (Kafka, Axon, or equivalent) exists in the current stack; introducing one is at minimum one additional integration sprint with no v1 deadline justification.
+
+---
+
+**Recommendation:** **Option 1 — Layered Domain Module.** The single `PhotoStoragePort` interface borrows the one hexagonal abstraction worth keeping from Option 2 without adopting its full overhead. CQRS is deferred until matching-feed latency measurements under real load prove it necessary.
+
+---
+
+## Architecture Decision Record
+
+See: `docs/adr/ADR-001-layered-domain-module.md`
+
+---
+
 ## System Flows
 
 ### Photo Upload
@@ -609,6 +663,59 @@ sealed class DogProfileError : RuntimeException() {
 - Photo upload targets p95 < 3 s (NFR-P02): `S3Client` (synchronous) is sufficient at v1 scale; if throughput grows, replace with `S3AsyncClient`.
 - Stateless service layer (NFR-SC01): no in-memory session state; MinIO and PostgreSQL are the only stateful systems; horizontal scaling of the Spring Boot pod does not require sticky sessions.
 - `PhotoPurgeScheduler` runs at 02:00 daily with a low-priority thread to avoid contention with serving traffic.
+
+---
+
+## Corner Cases
+
+### Input boundary cases
+
+| Scenario | Expected Behaviour | Req |
+|----------|--------------------|-----|
+| `name` is a whitespace-only string | `@NotBlank` rejects with 400; `name` included in field-level error list | 1.3 |
+| `age` is `-1` or `999` | `@Min(0) @Max(30)` rejects with 400 | 1.3 |
+| `breed` is an unrecognised string | `BreedReferenceService.resolve` throws `InvalidBreed`; 400 returned with list of valid enum names | 1.3, NFR-C02 |
+| `name` at exactly 100 characters (VARCHAR limit) | Accepted, stored, and returned verbatim | 1.1 |
+| Two concurrent `POST /api/v1/dogs` for the same owner | Service-layer check may pass on both threads; the DB `UNIQUE` constraint on `owner_id` ensures exactly one succeeds; the loser receives 409 | 1.2, NFR-C01 |
+| `temperamentTags` contains `"aggressive"` (not in vocabulary) | Jackson enum deserialisation throws `InvalidFormatException`; mapped to 400 with the invalid tag name listed | 3.4 |
+| Photo `multipart/form-data` field is absent (no file part) | Spring `MissingServletRequestPartException` → 400 before reaching service layer | 2.2 |
+
+### State & timing edge cases
+
+| Scenario | Expected Behaviour | Req |
+|----------|--------------------|-----|
+| Two concurrent photo uploads when the profile already has 4 photos | Both threads read count = 4 and pass the guard; both reach MinIO; the second DB insert violates the service invariant — the `addPhoto` method must re-check under a row-level lock (`SELECT … FOR UPDATE`) before inserting; the loser returns 422 and its MinIO object is rolled back | 2.3, 2.4 |
+| `PATCH /api/v1/dogs/me` clears `breed` on a `COMPLETE` profile | `evaluateCompletionStatus()` sets status to `INCOMPLETE`; the matching feed blocks the owner until `breed` is restored (requirement 4.2) | 6.4 |
+| Spring `@Async` executor shuts down mid-event dispatch | `DogProfileUpdatedEvent` or `DogProfileDeletedEvent` is lost; compatibility scores become stale until the next manual re-computation or re-publish; acceptable at v1 (best-effort delivery) | 6.3 |
+| `PhotoPurgeScheduler` runs while a `DELETE /api/v1/dogs/me` is in flight | `deletedAt` is written atomically in the same transaction; if the scheduler query runs before the commit, the profile is not returned by the 30-day cutoff query; PostgreSQL MVCC prevents phantom reads | 7.1 |
+
+### Integration failure modes
+
+| Dependency | Failure Mode | Expected Behaviour | Req |
+|------------|-------------|-------------------|-----|
+| MinIO unavailable during photo upload | `S3Client.putObject` throws; `StorageFailure` propagated; 502 returned; no DB record created | 2.1, NFR-R01 |
+| MinIO timeout on a 5 MB file near the p95 threshold | `S3Client` request timeout triggers `StorageFailure`; same 502 path; no orphaned DB record | NFR-P02 |
+| MinIO unavailable during photo deletion | `S3Client.deleteObject` throws; `StorageFailure` propagated; DB record is NOT removed; 502 returned; client may retry | 2.5 |
+| MinIO `deleteObject` returns success but the object persists (eventual consistency edge) | DB record removed; object orphaned in MinIO; `PhotoPurgeScheduler` treats a missing object as already deleted — idempotent and safe | 7.1 |
+| PostgreSQL unavailable mid-profile creation | Spring `@Transactional` rolls back; no partial write; 500 returned | NFR-R02 |
+| Spring `@Async` executor thread pool exhausted | Event dropped silently; no retry in v1; compatibility score not updated for this mutation | 6.3 |
+
+### Security edge cases
+
+| Scenario | Expected Behaviour | Req |
+|----------|--------------------|-----|
+| JWT expires between MinIO `putObject` success and the DB insert | JWT filter rejects the request before the service is reached if expiry is detected early; if expiry occurs mid-request, the DB transaction rolls back; the MinIO object is orphaned — `PhotoPurgeScheduler` will not collect it (profile not soft-deleted); requires periodic MinIO orphan-scan in v2 | NFR-S01 |
+| Authenticated user guesses another owner's `profileId` via `GET /api/v1/dogs/{id}` | Request succeeds: any authenticated user may read any profile per requirement 5.3; no ownership restriction on reads by design | 5.3 |
+| `multipart/form-data` with `Content-Type: image/jpeg` header but actual executable payload bytes | v1 validates the declared content-type header only; magic-byte inspection is deferred to v2; MinIO does not execute uploaded content, so no RCE risk | NFR-S02 |
+| Cross-owner `PATCH` or `DELETE` using a valid JWT with a different `sub` claim | `DogProfileService` compares `ownerId` (from JWT `sub`) with `dogProfile.ownerId`; throws `DogProfileError.Forbidden` → 403 | NFR-S03 |
+
+### Data edge cases
+
+| Scenario | Expected Behaviour | Req |
+|----------|--------------------|-----|
+| A `Breed` enum value is removed from the codebase after profiles have been stored with it | Jackson deserialisation fails on read for affected profiles; mitigation: only add enum values, never remove; maintain backward-compatible aliases if renaming is required | NFR-C02 |
+| `temperament_tags TEXT[]` queried for "all profiles containing tag X" in a future matching filter | PostgreSQL requires a GIN index for array containment (`@>`) queries; current schema has none — query degrades to sequential scan; adding a GIN index is a non-blocking `CREATE INDEX CONCURRENTLY` migration | 3.x |
+| 10× load: 10,000 concurrent `GET /api/v1/dogs/{id}` requests | PK and `UNIQUE (owner_id)` indexes keep query time in O(log n); HikariCP default pool of 10 connections saturates at ~100 concurrent requests — pool size must be tuned for production before the matching feed goes live | NFR-P01 |
 
 ---
 
