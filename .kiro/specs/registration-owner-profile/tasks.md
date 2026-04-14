@@ -31,14 +31,14 @@
 ---
 
 - [ ] 2. Database Schema & Domain Entities <!-- gh:#56 -->
-- [ ] 2.1 Create Liquibase changesets for the core schema <!-- gh:#57 -->
+- [x] 2.1 Create Liquibase changesets for the core schema <!-- gh:#57 -->
   - Write a changeset for the `owners` table with all columns, `UNIQUE` index on email, status index, and a tested rollback
   - Write changesets for `verification_tokens` and `refresh_tokens` tables, with FK references to `owners(id) ON DELETE CASCADE` and appropriate indexes
   - Register all changesets in the Liquibase master changelog in dependency order
   - Verify `ddl-auto=validate` passes after migration runs
   - _Requirements: 1.2, 1.10, 2.3, 2.4_
 
-- [ ] 2.2 Implement the Owner domain entity and repository <!-- gh:#58 -->
+- [x] 2.2 Implement the Owner domain entity and repository <!-- gh:#58 -->
   - Create the Owner JPA entity covering all fields: id (UUID), email, password hash, name, photo path, status enum, location value object (city, country, latitude, longitude, consent flag), and timestamps
   - Create the OwnerStatus enum with `PENDING_VERIFICATION` and `ACTIVE` values
   - Create the OwnerLocation embeddable value object
