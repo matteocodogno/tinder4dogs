@@ -18,7 +18,7 @@
   - Remove or downgrade `spring.jpa.hibernate.ddl-auto` to `validate` as Liquibase takes ownership of schema
   - _Requirements: 1.6, 1.8, 4.1, 4.2_
 
-- [ ] 1.2 Configure application properties for all new services <!-- gh:#55 -->
+- [x] 1.2 Configure application properties for all new services <!-- gh:#55 -->
   - Add Spring Security settings: JWT secret key (sourced from env), bcrypt strength property
   - Add mail server settings under `spring.mail.*` with environment-variable fallbacks
   - Add reCAPTCHA properties: secret key and minimum score threshold (default 0.5)
