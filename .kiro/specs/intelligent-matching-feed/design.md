@@ -752,3 +752,114 @@ Validate at controller boundaries (Bean Validation); translate domain exceptions
 - Swipe p95 ≤ 200 ms: single DB write + one index lookup; no AI calls.
 - The service is stateless; `OwnerPreferences` read per request from DB (cache optional via Spring Cache + Caffeine for radius/consent).
 - pgvector HNSW index parameters (`m`, `ef_construction`) to be tuned post-MVP based on recall/latency benchmarks.
+
+---
+
+## Architecture Options Considered
+
+### Option 1: Domain-driven modules (selected)
+New `feed/` domain module alongside the existing `match/` domain, following the established `model/ → service/ → presentation/` pattern.
+
+**Advantages:**
+- Consistent with `structure.md` precedents (`match/`, `support/`) — zero new architectural concepts; every developer already understands the pattern.
+- Clear ownership seams: `feed/` owns swipe/match lifecycle, `match/` owns `DogProfile` aggregate — no entity ownership conflicts during parallel development.
+- `FeedService`, `SwipeService`, and `MatchService` can be developed in parallel without file-level merge conflicts across domain boundaries.
+
+**Disadvantages:**
+- Introduces one cross-domain read: `FeedService` injects `DogProfileRepository` (owned by `match/`) — slightly violates strict domain encapsulation.
+- Two packages to navigate: developers tracing a swipe flow must cross from `feed/` into `match/` for entity definitions.
+- `DogProfile` placement in `match/` may feel disconnected from the feed context where it is most heavily used.
+
+### Option 2: Single `match/` extension
+Expand the existing `match/` domain to contain feed, swipe, and match logic alongside the existing `DogMatcherService` stub.
+
+**Advantages:**
+- All related code in one package — no cross-domain imports needed.
+- Smaller package footprint; fewer new directories.
+- Existing `DogMatcherService` stub can be incrementally improved in place.
+
+**Disadvantages:**
+- Creates a bloated `match/` domain with three distinct responsibilities (profile management, feed orchestration, swipe lifecycle) — violates single-responsibility and makes future extraction more expensive.
+- `DogMatcherService` is explicitly marked buggy; inheriting its package risks scope creep and unintended coupling with legacy stubs.
+- Parallel implementation of feed and swipe tasks conflicts on the same package, increasing merge risk.
+
+### Option 3: Hexagonal / Ports & Adapters
+Core domain (scoring, match rules) isolated behind port interfaces; infrastructure (JPA, LiteLLM, pgvector) wired through adapters.
+
+**Advantages:**
+- Core logic is fully infrastructure-independent — unit-testable without Spring context or database.
+- Adapter swap (e.g., replace pgvector with a dedicated vector DB) does not touch the domain layer.
+- Clear separation of domain events from infrastructure side-effects.
+
+**Disadvantages:**
+- Requires building out an adapter layer (~4 adapters: JPA, LiteLLM, Langfuse, geo) before any business logic can be exercised end-to-end — increases initial development effort.
+- Team has no prior hexagonal code in this repo; introduces an unfamiliar pattern alongside a greenfield JPA implementation.
+- For v1 scale (single service, single DB), the indirection adds measurable overhead with no immediate benefit.
+
+**Recommendation:** Option 1 (domain-driven modules) — it is the lowest-risk choice that is consistent with the existing codebase, enables parallel task delivery, and defers architectural complexity until the system demonstrates the need for it. See ADR below.
+
+---
+
+## Architecture Decision Record
+
+See: [docs/adr/ADR-001-feed-domain-module-placement.md](../../../docs/adr/ADR-001-feed-domain-module-placement.md)
+
+**Summary:**
+- **Status**: Proposed
+- **Decision**: Implement the Intelligent Matching Feed as a new `feed/` domain module, following the existing layered domain pattern, with `DogProfile` remaining in `match/`.
+- **Key trade-off accepted**: One cross-domain read dependency (`FeedService` → `DogProfileRepository`) in exchange for zero merge conflicts during parallel task implementation and full consistency with existing architectural patterns.
+- **NFRs affected**: NFR-SC1 (stateless, horizontally scalable), NFR-T1 (Kotlin + Spring Boot, WebMVC).
+
+---
+
+## Corner Cases
+
+### Input Boundary Cases
+
+| Scenario | Expected Behaviour | Req Coverage |
+|----------|--------------------|--------------|
+| `GET /api/v1/feed` with `page` or `size` as negative integer | Spring `@Validated` rejects with 400; `FeedService` never invoked | 2.1 |
+| `PATCH /api/v1/me/search-radius` with `radiusKm = 0` | Valid; accepted and persisted; next feed uses the 0 km radius, returning empty list with `noMoreCandidates = true` | 7.1, 2.5 |
+| `PATCH /api/v1/me/search-radius` with `radiusKm = 101` | 400 with descriptive message; preference not updated | 7.2 |
+| `POST /api/v1/swipe` with `targetDogProfileId` equal to the requester's own dog | `SwipeService` ownership check detects self-swipe; returns 400 `invalid_swipe_target` | 5.1 |
+| Dog profile with `temperamentTags = []` or `purpose = []` | `FeedService` treats profile as incomplete; feed access blocked with 422 `dog_profile_incomplete` | 1.3 |
+| `compatibilityVector = null` (embedding not yet generated) | `DogProfileRepository.findCandidatesWithinRadius` excludes null-vector profiles from ANN results; rule-based scorer used as fallback | 3.6 |
+
+### State & Timing Edge Cases
+
+| Scenario | Expected Behaviour | Req Coverage |
+|----------|--------------------|--------------|
+| Two owners simultaneously swipe RIGHT on each other (race condition on `match_records` insert) | DB unique constraint on `(dog_profile_id_1, dog_profile_id_2)` causes one INSERT to fail with `ConstraintViolationException`; the winning transaction commits and publishes `MatchCreatedEvent`; the losing transaction rolls back and retries the swipe record only — no duplicate `MatchRecord` created | 6.3, 6.5 |
+| Owner deletes their dog profile while another owner is mid-swipe on it | `SwipeService` detects `active = false` on target profile lookup; returns 404 `dog_profile_not_found`; client removes profile from local feed cache | 5.3 |
+| Owner updates search radius concurrently with a feed request in flight | `FeedService` reads `OwnerPreferences.searchRadius` at request start; the concurrent update does not affect the in-flight query; the new radius applies to the next request — no partial state | 7.3 |
+| `MatchCreatedEvent` published but the notification service listener is not deployed | Event is dispatched in-process via `ApplicationEventPublisher`; if no listener is registered, the event is silently dropped — no rollback triggered. In v1 this is acceptable; the notification spec (F-05) must register its listener before production rollout | 6.2 |
+| Feed requested immediately after dog profile is completed (cold embedding vector) | `compatibilityVector` is null; candidates without a vector are excluded from ANN retrieval; if remaining candidate pool is non-empty, rule-based scoring is used; if pool is empty, `noMoreCandidates = true` is returned | 3.6, 2.5 |
+
+### Integration Failure Modes
+
+| Dependency | Failure Mode | Expected Behaviour | Req Coverage |
+|------------|--------------|-------------------|--------------|
+| LiteLLM proxy | Timeout or 5xx on `/chat/completions` | `CompatibilityScoringService` catches the exception, logs at WARN with trace ID, activates `RuleBasedCompatibilityScorer` for the entire batch — feed request completes without 5xx | 3.6, NFR-R1 |
+| LiteLLM proxy | Cascade: both AI and embedding endpoints unavailable | Feed degrades to rule-based scoring; `compatibilityVector` generation is deferred; HNSW ANN falls back to sequential scan (no index entries) — feed latency increases but service remains available | 3.6 |
+| Langfuse | Prompt fetch failure (network error or 404 for prompt ID) | `TracedPromptExecutor` TTL cache serves stale prompt if available; on cold start with no cache, exception propagates to `CompatibilityScoringService` which activates rule-based fallback | 3.5, 3.6 |
+| PostgreSQL | DB unreachable on swipe write | `@Transactional` rolls back; `SwipeService` propagates 500 with structured `traceId`; no partial `SwipeInteraction` or `MatchRecord` is written | 6.5, NFR-R2 |
+| PostgreSQL | pgvector extension not installed | `DogProfileRepository` ANN query fails at startup (Liquibase migration enforces `CREATE EXTENSION IF NOT EXISTS vector`); if migration was skipped, application fails to start rather than silently degrading | NFR-SC2 |
+
+### Security Edge Cases
+
+| Scenario | Expected Behaviour | Req Coverage |
+|----------|--------------------|--------------|
+| JWT expired mid-session during a feed request | Spring Security filter rejects with 401 before `FeedService` is called | NFR-S1 |
+| Attacker supplies a forged `ownerId` in the swipe request body | `SwipeService` ignores the request body's `ownerId`; extracts `ownerId` exclusively from the validated JWT principal; 403 if target dog does not belong to the JWT principal's owner | NFR-S2, 5.1 |
+| Prompt injection in dog name / breed field sent to LiteLLM | `TracedPromptExecutor` passes all variable inputs through `PromptSanitizer` before interpolation; injected control tokens are escaped | 3.5 |
+| Attacker replays a valid swipe request (same `swiperId`, `targetId`, action) | `SwipeRepository` upsert returns the existing `SwipeInteraction` record; no duplicate created; response is identical to the original — idempotent by design | 5.4 |
+| `FeedEntryResponse` inadvertently includes raw coordinates | DTO definition has no latitude/longitude fields; Kotlin data class prevents field addition without explicit code change; PR review gate enforces | NFR-C1 |
+
+### Data Edge Cases
+
+| Scenario | Expected Behaviour | Req Coverage |
+|----------|--------------------|--------------|
+| `dog_profiles` table has existing rows before `compatibility_vector` column is added (future migration) | Liquibase migration adds the column as `NULLABLE`; existing rows have `null` vectors; ANN queries exclude null-vector rows; no data loss | NFR-SC2 |
+| Geolocation consent revoked after precise coordinates were stored | `GeolocationService.getApproximatedLocation` checks consent flag per request; if consent is `false`, returns city-centroid regardless of stored coordinates; precise coordinates are not deleted immediately (erasure is covered by NFR-C3 GDPR flow) | 4.2, NFR-C2 |
+| `swipe_interactions` table at 10x projected load (~10M rows) | Unique index on `(swiper_id, target_id)` and composite index on `(swiper_id, action)` maintain sub-millisecond exclusion set lookups; no full-table scans; B-tree indexes remain efficient beyond 100M rows | NFR-P2, 2.3 |
+| Owner account erasure request with active `MatchRecord` referencing their `DogProfile` | All `SwipeInteraction` rows where `swiper_id` or `target_id` matches the dog profile are deleted; `MatchRecord` rows are deleted; `chatChannelId` invalidated; cascading deletes handled via DB FK `ON DELETE CASCADE` on `dog_profiles` | NFR-C3 |

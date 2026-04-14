@@ -1,0 +1,19 @@
+- **Status**: Proposed
+- **Context**: The Intelligent Matching Feed is a greenfield feature requiring new JPA entities (DogProfile, SwipeInteraction, MatchRecord), repositories, services, and REST controllers. The existing codebase already contains a `match/` domain stub with an intentionally buggy `DogMatcherService`. A structural decision is required: extend `match/`, introduce a dedicated `feed/` module, or adopt a hexagonal port-and-adapter pattern. The team follows the `model/ → service/ → presentation/` layered domain convention documented in `structure.md`. Two implementation tracks (feed query path and swipe/match write path) will be developed in parallel.
+- **Decision**: Create a new `feed/` domain module for swipe and match lifecycle logic, keeping the `DogProfile` aggregate root in the existing `match/` domain. The `feed/` module owns `SwipeInteraction`, `MatchRecord`, `FeedService`, `SwipeService`, `MatchService`, and `GeolocationService`. AI scoring infrastructure is placed in `ai/common/service/` per the existing AI sub-module convention.
+  - New packages: `com.ai4dev.tinderfordogs.feed.{model,service,presentation}`
+  - Existing package retained: `com.ai4dev.tinderfordogs.match.{model,repository}`
+  - Cross-domain read: `FeedService` and `SwipeService` inject `DogProfileRepository` from `match/`
+- **Consequences**:
+  - ✔ Zero merge conflicts between the feed-query and swipe-write implementation tracks — each track lives in separate files under `feed/service/`
+  - ✔ Consistent with all existing domain modules; no new architectural concepts for developers to learn
+  - ✔ `DogProfile` entity is reused read-only by `feed/`; no duplication of the aggregate definition
+  - ✘ One read-only cross-domain dependency (`FeedService` → `DogProfileRepository`) breaks strict domain isolation — mitigated by keeping the dependency read-only and injecting via Spring, not direct instantiation
+  - ✘ If `DogProfile` evolves significantly (e.g., splits into separate identity and compatibility aggregates), `feed/` will require coordinated updates — acceptable at current scale
+- **Alternatives**:
+  - *Single `match/` extension* — Rejected because it merges three distinct responsibilities (profile management, feed orchestration, swipe lifecycle) into one package, conflicting with the project's single-responsibility convention and increasing parallel-development merge risk.
+  - *Hexagonal / Ports & Adapters* — Deferred because it requires building ~4 infrastructure adapters before any business logic is exercisable end-to-end, and introduces an unfamiliar pattern alongside the first JPA implementation in the codebase. Suitable for a v2 refactor if the scoring adapter needs to be swapped.
+- **References**:
+  - `.kiro/steering/structure.md` — domain module pattern
+  - `.kiro/specs/intelligent-matching-feed/requirements.md` — NFR-SC1, NFR-T1
+  - `.kiro/specs/intelligent-matching-feed/research.md` — Architecture Pattern Evaluation section
