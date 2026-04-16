@@ -4,7 +4,7 @@
 
 The in-app-notifications feature delivers real-time browser notifications to authenticated PawMatch owners when key events occur (new match, new incoming message). It introduces a new `notification` domain module following the project's existing domain-driven package structure (`notification/model/`, `notification/service/`, `notification/presentation/`), backed by two new PostgreSQL tables.
 
-Real-time delivery uses `SseEmitter` (Spring WebMVC) for the server→client stream. Multi-node fan-out is coordinated through PostgreSQL `LISTEN/NOTIFY`, which broadcasts events to every service node simultaneously; each node maintains an in-memory emitter registry and fans out locally to its own active connections. A persist-first pattern ensures no notification is lost if the user is offline at delivery time.
+Real-time delivery uses `SseEmitter` (Spring WebMVC) for the server→client stream. Multi-node fan-out is achieved through periodic SELECT polling of the `notifications` table; each node independently queries for new notifications for its locally connected users and pushes them to the relevant emitters. A persist-first pattern ensures no notification is lost if the user is offline at delivery time.
 
 **Users**: Casual owners (Marco) and breeding owners (Giulia) receive notifications passively; no active interaction is required beyond opening the app.
 
@@ -43,7 +43,7 @@ graph TB
         Service[NotificationService]
         PrefService[NotificationPreferenceService]
         Registry[SseEmitterRegistry]
-        Listener[PostgresNotificationListener]
+        Poller[NotificationPollingService]
         Cleanup[NotificationCleanupService]
     end
 
@@ -54,7 +54,6 @@ graph TB
 
     subgraph Storage [infrastructure]
         PG[(PostgreSQL - main pool)]
-        PGListen[(PostgreSQL - listen connection)]
     end
 
     Browser -->|GET /stream SSE| Controller
@@ -65,17 +64,15 @@ graph TB
     MatchSvc -->|publishMatchNotification| Service
     ChatSvc -->|publishMessageNotification| Service
     Service --> PG
-    Service -->|NOTIFY pawmatch_notifications| PG
-    Listener -->|LISTEN poll 500ms| PGListen
-    PGListen -.->|broadcast| Listener
-    Listener --> Registry
+    Poller -->|SELECT poll interval| PG
+    Poller --> Registry
     Registry -->|emitter.send| Browser
     Cleanup --> PG
 ```
 
 **Key decisions captured in diagram**:
-- `PostgresNotificationListener` uses a **dedicated JDBC connection** (not from HikariCP pool) — required for LISTEN semantics.
-- `SseEmitterRegistry` is node-local; cross-node delivery is handled by PostgreSQL broadcasting NOTIFY to all connected listeners.
+- `NotificationPollingService` polls the `notifications` table on a configurable interval (default 500 ms) using the standard HikariCP pool — no dedicated connection required.
+- Each node independently queries only for users with locally registered emitters, then pushes to those emitters via `SseEmitterRegistry`.
 - `NotificationCleanupService` runs only on one node at a time, guarded by ShedLock.
 
 **Architecture Integration**:
@@ -83,12 +80,12 @@ graph TB
 - Domain boundary: The `notification` module owns all persistence and delivery; publishing domains call `NotificationService` without knowing delivery mechanics.
 - Steering compliance: No global `service/` or `controller/` packages; all components nested under `notification/`.
 
-### Technology Stack
+### Technology Stack & Alignment
 
 | Layer | Choice / Version | Role in Feature | Notes |
 |-------|------------------|-----------------|-------|
 | SSE Transport | `SseEmitter` (spring-web, Boot 4.0.4) | Server→client push stream | WebMVC-native; no new dep |
-| Fan-out Broker | PostgreSQL LISTEN/NOTIFY (JDBC 42.7.x) | Multi-node event broadcast | Reuses existing JDBC driver |
+| Fan-out Mechanism | DB SELECT polling via Spring Data JPA (existing) | Multi-node event delivery | No new dependency; uses HikariCP pool |
 | Cleanup Locking | ShedLock 6.x (`shedlock-spring`, `shedlock-provider-jdbc-template`) | Distributed single-node cleanup job | 2 new pom.xml deps |
 | Persistence | Spring Data JPA + PostgreSQL (existing) | Notification + preference storage | 2 new JPA entities |
 | Scheduling | Spring `@Scheduled` + `@EnableScheduling` (existing) | 30-day TTL cleanup | ShedLock guard required |
@@ -107,21 +104,24 @@ sequenceDiagram
     participant MS as MatchService
     participant NS as NotificationService
     participant PG as PostgreSQL
-    participant PL as PostgresNotificationListener
+    participant PO as NotificationPollingService
     participant RE as SseEmitterRegistry
     participant CL as Browser
 
     MS->>NS: publishMatchNotification(matchId, ownerId1, ownerId2)
     NS->>PG: check preferences for ownerId1 and ownerId2
     NS->>PG: INSERT notifications for enabled recipients
-    NS->>PG: NOTIFY pawmatch_notifications with JSON payload
-    PG-->>PL: broadcast NOTIFY to all listening nodes
-    PL->>RE: dispatchToUser(ownerId1, event)
-    PL->>RE: dispatchToUser(ownerId2, event)
+    Note over PO: next poll interval fires
+    PO->>RE: getConnectedUserIds()
+    RE-->>PO: set of locally active userIds
+    PO->>PG: SELECT WHERE user_id IN localIds AND created_at GT lastPollCursor
+    PG-->>PO: new notification rows
+    PO->>RE: dispatchToUser(ownerId1, event)
+    PO->>RE: dispatchToUser(ownerId2, event)
     RE->>CL: synchronized emitter.send(event)
 ```
 
-**Key decisions**: NOTIFY is issued only after the INSERT commits (persist-first). If NOTIFY fails, the notification is already in the DB and will be replayed on reconnect. Preferences are checked before INSERT — if a user has disabled the type, no record is created.
+**Key decisions**: INSERT commits first (persist-first); polling service picks up the row on the next interval (default 500 ms). If a node has no active emitter for a user, it skips that user — the notification remains in the DB and is replayed on reconnect via `Last-Event-ID`. Preferences are checked before INSERT — if a user has disabled the type, no record is created.
 
 ### Flow 2: SSE Connection and Missed-Event Replay
 
@@ -162,7 +162,7 @@ sequenceDiagram
 | 2.1–2.2 | Authenticated connection, JWT reject 401 | NotificationController | SSE endpoint | Flow 2 |
 | 2.3–2.4 | Connection lifecycle callbacks (onCompletion, onTimeout, onError) | SseEmitterRegistry | `register`, `deregister` | Flow 2 |
 | 2.5 | Multi-tab: all emitters receive event | SseEmitterRegistry | `dispatchToUser` iterates list | Flow 1 |
-| 2.6 | Stateless fan-out via PostgreSQL LISTEN/NOTIFY | PostgresNotificationListener | dedicated connection | Flow 1 |
+| 2.6 | Cross-node fan-out via DB SELECT polling | NotificationPollingService | `pollAndDispatch` | Flow 1 |
 | 3.1–3.4 | Typed payloads (NEW_MATCH, NEW_MESSAGE), no geo, ISO 8601 | NotificationPayload sealed class, NotificationService | SSE event data | — |
 | 4.1–4.6 | Notification persistence, history, pagination, mark-read, bulk mark-read, audit retention | NotificationService, NotificationRepository | REST API | — |
 | 4.7 | Unread-count endpoint | NotificationService | `GET /unread-count` | — |
@@ -174,7 +174,7 @@ sequenceDiagram
 
 ---
 
-## Components and Interfaces
+## Components & Interface Contracts
 
 ### Component Summary
 
@@ -184,7 +184,7 @@ sequenceDiagram
 | NotificationService | notification / service | Core logic: publish, persist, query, mark-read | 1.1–1.5, 3.1–3.4, 4.1–4.9, 5.1–5.5, 6.1–6.2 | NotificationRepository, NotificationPreferenceService, JdbcTemplate | Service |
 | NotificationPreferenceService | notification / service | Preferences CRUD; preference check | 7.1–7.6 | NotificationPreferenceRepository | Service |
 | SseEmitterRegistry | notification / service | In-process emitter lifecycle + synchronized send | 2.1, 2.3–2.6 | SseEmitter (spring-web) | Service, State |
-| PostgresNotificationListener | notification / service | Polls PG LISTEN; dispatches to registry | 1.1–1.2, 2.6 | SseEmitterRegistry, JdbcTemplate (dedicated) | Service |
+| NotificationPollingService | notification / service | SELECT polls notifications table; dispatches to registry | 1.1–1.2, 2.6 | SseEmitterRegistry, NotificationRepository | Service |
 | NotificationCleanupService | notification / service | 30-day TTL delete; ShedLock-guarded | 4.8 | JdbcTemplate, ShedLock | Batch |
 
 ---
@@ -260,14 +260,13 @@ Heartbeat (every 30 s):
 
 **Responsibilities & Constraints**
 - Called by `MatchService` and `ChatService` to publish events; must not throw exceptions back to callers (Req 6.2).
-- Preference check and INSERT must occur within the same transaction; NOTIFY is issued via `@TransactionalEventListener(AFTER_COMMIT)` to ensure the record is visible before fan-out.
+- Preference check and INSERT must occur within the same transaction; the polling service picks up the committed row on the next interval.
 - Enforces user ownership on all queries and mutations (`WHERE user_id = authenticatedUserId`).
 
 **Dependencies**
 - Inbound: NotificationController (queries), MatchService (publish), ChatService (publish)
 - Outbound: `NotificationRepository` — JPA CRUD (P0)
 - Outbound: `NotificationPreferenceService` — preference lookup (P0)
-- Outbound: `JdbcTemplate` — raw NOTIFY SQL (P0)
 
 **Contracts**: Service [x]
 
@@ -299,7 +298,6 @@ Postconditions: After `publishMatchNotification`, a `Notification` record exists
 Invariants: `notification.userId` always equals the authenticated requester for any read operation.
 
 **Implementation Notes**
-- Integration: Use `@TransactionalEventListener(TransactionPhase.AFTER_COMMIT)` for NOTIFY to guarantee the INSERT is committed before broadcast.
 - Validation: `messagePreview` truncated to 100 chars with trailing `…` if longer.
 - Risks: If the notification INSERT is in the same transaction as the match creation and that transaction rolls back, no notification is created — correct behaviour.
 
@@ -363,6 +361,8 @@ interface SseEmitterRegistry {
     fun dispatchToUser(userId: UUID, event: SseEmitter.SseEventBuilder)
     fun sendHeartbeatToAll()
     fun getActiveUserCount(): Int
+    /** Returns the set of userIds that have at least one active emitter on this node. */
+    fun getConnectedUserIds(): Set<UUID>
 }
 ```
 
@@ -374,54 +374,48 @@ interface SseEmitterRegistry {
 
 ---
 
-#### PostgresNotificationListener
+#### NotificationPollingService
 
 | Field | Detail |
 |-------|--------|
-| Intent | Polls PostgreSQL LISTEN on `pawmatch_notifications` channel; dispatches received events to SseEmitterRegistry |
+| Intent | Periodically SELECTs new notifications for locally connected users and dispatches them to SseEmitterRegistry |
 | Requirements | 1.1–1.2, 2.6 |
 
 **Responsibilities & Constraints**
-- Uses a **dedicated** JDBC connection obtained once at startup (`DataSource.getConnection()`, never returned to pool). Reconnects with exponential backoff on failure.
-- Polling loop: `PGConnection.getNotifications(500L)` — blocks 500 ms, returns 0–N pending notifications.
-- Parses NOTIFY payload JSON; extracts `userId` and constructs `SseEmitter.SseEventBuilder`.
-- Does not interact with JPA or HikariCP pool.
+- Runs a `@Scheduled` task on a configurable interval (default 500 ms).
+- On each tick: asks `SseEmitterRegistry` for the set of currently connected `userId`s on this node, then queries `notifications` for rows newer than the in-memory poll cursor for those users.
+- Advances the poll cursor to the `MAX(created_at)` of the fetched batch after dispatching.
+- Cursor is in-memory; on node restart, the cursor resets to `NOW()` — notifications created before restart are recoverable via the `Last-Event-ID` reconnect replay path.
+- Does not interact with any dedicated JDBC connection; uses the standard HikariCP pool via `NotificationRepository`.
 
 **Dependencies**
-- Inbound: Application startup (`@PostConstruct`)
+- Inbound: Spring `@Scheduled` executor
+- Outbound: `SseEmitterRegistry.getConnectedUserIds()` (P0)
 - Outbound: `SseEmitterRegistry.dispatchToUser` (P0)
-- External: PostgreSQL JDBC `PGConnection` (P0)
+- Outbound: `NotificationRepository` — polling query (P0)
 
 **Contracts**: Service [x]
 
-##### NOTIFY Payload Schema
+##### Service Interface
 
-```json
-{
-  "notificationId": "uuid",
-  "userId": "uuid",
-  "type": "NEW_MATCH | NEW_MESSAGE",
-  "matchId": "uuid",
-  "matchedDogName": "string",          // NEW_MATCH only
-  "matchedDogPhotoUrl": "string|null", // NEW_MATCH only
-  "senderDogName": "string",           // NEW_MESSAGE only
-  "messagePreview": "string",          // NEW_MESSAGE only, max 100 chars
-  "createdAt": "ISO 8601 UTC string"
+```kotlin
+interface NotificationPollingService {
+    /** Invoked by @Scheduled; queries DB and dispatches to local emitters. */
+    fun pollAndDispatch()
 }
 ```
 
-Payload size: ~300–500 bytes; well within the 8 000-byte PostgreSQL NOTIFY limit.
+##### Polling Query Contract
 
-##### Event Contract
-
-- Subscribed channel: `pawmatch_notifications` (single channel for all notification types)
-- Published by: `NotificationService` via `NOTIFY pawmatch_notifications, '<json>'` (raw JDBC)
-- Delivery guarantee: At-most-once for real-time; at-least-once via reconnect replay (DB-backed)
-- Ordering: FIFO per PostgreSQL node; no cross-node ordering guarantee (acceptable for notifications)
+- Trigger: `@Scheduled(fixedDelayString = "\${notifications.poll-interval-ms:500}")`
+- Input: `connectedUserIds` from `SseEmitterRegistry`; in-memory `lastPollCursor: Instant`
+- Query: `SELECT * FROM notifications WHERE user_id IN :userIds AND created_at > :cursor ORDER BY created_at ASC`
+- Output: `NotificationDto` list dispatched per user via `SseEmitterRegistry.dispatchToUser`
+- Idempotency: Cursor advances only after successful dispatch; a duplicate push on cursor reset is harmless — clients deduplicate by `notificationId`
 
 **Implementation Notes**
-- Integration: Start listener in `@PostConstruct`; shutdown in `@PreDestroy` (close dedicated connection, stop polling thread).
-- Risks: Dedicated connection must not time out; set `socketTimeout` on the connection URL or issue periodic `SELECT 1` keepalive.
+- Integration: If `connectedUserIds` is empty, skip the DB query entirely to avoid unnecessary load.
+- Risks: On node restart the cursor resets; notifications created during downtime for offline users are already in the DB and replayed via `Last-Event-ID` — no data loss.
 
 ---
 

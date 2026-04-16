@@ -33,7 +33,7 @@ PawMatch requires a real-time in-app notification system to keep dog owners imme
 3. When a connection is closed by the client (normal close), the Notification Service shall release all server-side resources associated with that connection immediately.
 4. If a connection drops unexpectedly (network error, timeout), the Notification Service shall release all server-side resources associated with that connection within 30 seconds.
 5. While a user has multiple concurrent browser-tab connections, the Notification Service shall deliver each notification to all active connections belonging to that user.
-6. The Notification Service shall fan out events to all nodes using PostgreSQL `LISTEN/NOTIFY`; no per-node in-memory connection registry shall be the sole source of truth for active connections.
+6. The Notification Service shall fan out events to all nodes via periodic SELECT polling of the `notifications` table; each node shall independently query for new notifications and push them to its locally registered connections.
 
 ---
 
@@ -132,7 +132,7 @@ PawMatch requires a real-time in-app notification system to keep dog owners imme
 
 | NFR ID  | Description                                                    | Threshold                                      | Priority | Source Req    |
 |---------|----------------------------------------------------------------|------------------------------------------------|----------|---------------|
-| NFR-N-07 | Stateless connection management via PostgreSQL LISTEN/NOTIFY  | Events fanned out via PostgreSQL `LISTEN/NOTIFY`; multiple service instances must operate without split-brain | P0 | Req 2 (NFR-05 from PRD) |
+| NFR-N-07 | Stateless connection management via DB polling  | Events fanned out via periodic SELECT polling of the `notifications` table; multiple service instances must operate without split-brain | P0 | Req 2 (NFR-05 from PRD) |
 
 ### Reliability
 
