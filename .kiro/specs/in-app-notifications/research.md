@@ -34,7 +34,7 @@
   - A background reaper (scan every 5 min) is needed for emitters that silently stale-out.
   - **Critical**: `emitter.send()` is NOT thread-safe (concurrent calls interleave bytes); wrap all sends with a `synchronized` block on the emitter or a per-emitter lock object.
   - No Spring Boot 4.0-specific breaking changes to SseEmitter behavior vs 3.x.
-- **Implications**: `SseEmitterRegistry` must synchronize all `send()` calls; must register all three callbacks on every new emitter.
+- **Implications**: `SseEmitterRegistry` must synchronize all `send()` calls; must register all three callbacks on every new emitter; must expose `getConnectedUserIds()` for the polling service.
 
 ### PostgreSQL LISTEN/NOTIFY
 
@@ -80,7 +80,8 @@
 | SSE via `SseEmitter` | WebMVC-native long-poll push | No new deps; familiar to team; sufficient for 1-way server→client push | Not thread-safe; requires synchronized wrapper | **Selected** |
 | WebSocket | Bidirectional full-duplex | More flexible; native reconnect | Adds `spring-boot-starter-websocket`; overkill for server-only push | Rejected |
 | WebFlux `Flux<ServerSentEvent>` | Reactive SSE | Clean async model | Conflicts with WebMVC-only constraint (tech.md) | Rejected |
-| PostgreSQL LISTEN/NOTIFY | Built-in pub/sub; no new infra | No Redis/Kafka; all in PG | Not for high-throughput (>1 000s/s); polling introduces up to 500 ms latency | **Selected** |
+| PostgreSQL LISTEN/NOTIFY | Built-in pub/sub; no new infra | No Redis/Kafka; all in PG | Requires dedicated JDBC connection outside HikariCP; added complexity | Rejected — replaced by DB polling |
+| DB SELECT polling | Periodic query of notifications table | No dedicated connection; uses HikariCP pool; simpler implementation | Slightly higher DB read load; up to 500 ms delivery latency | **Selected** |
 | Redis Pub/Sub | High-throughput fan-out | Very fast; rich ecosystem | New infrastructure; out of scope for v1 | Deferred (v2) |
 | ShedLock (JDBC) | Distributed lock via `shedlock` table | No Zookeeper/Redis; stays in PostgreSQL | 2 new deps | **Selected** |
 
