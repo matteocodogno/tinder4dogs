@@ -49,19 +49,6 @@
 
 ---
 
-# Spec-Driven Development (Kiro-style)
-
-This project follows an AI-DLC (AI Development Life Cycle) approach using Spec-Driven Development.
-
-## Project Context
-- **Steering:** `.kiro/steering/` (Project-wide rules and context).
-- **Specs:** `.kiro/specs/` (Feature-specific formalization).
-
-## Workflow Guidelines
-- **Target Language:** All Markdown artifacts (requirements, design, tasks, research) must be written in the language specified in `spec.json`.
-- **3-Phase Approval:** Requirements → Design → Tasks → Implementation.
-- **Steering Alignment:** Always verify changes against the project steering files (`product.md`, `tech.md`, `structure.md`).
-
 ## Available Skills
 Use the specialized OpenSpec skills for the development lifecycle:
 - `openspec-propose`: Quick proposal of new changes.
