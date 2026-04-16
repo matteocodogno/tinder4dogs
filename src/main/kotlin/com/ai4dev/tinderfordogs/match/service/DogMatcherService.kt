@@ -44,14 +44,16 @@ class DogMatcherService {
     /**
      * Find best match for a dog
      */
-    fun findBestMatch(
+    fun findBestMatches(
         dog: Dog,
         candidates: List<Dog>,
-    ): Dog? {
-        if (candidates.isEmpty()) return null
+        n: Int
+    ): List<Dog> {
+        if (candidates.isEmpty()) return listOf()
 
         return candidates
             .filter { it.id != dog.id }
-            .maxByOrNull { calculateCompatibility(dog, it) }
+            .sortedByDescending { calculateCompatibility(dog, it) }
+            .take(n)
     }
 }
