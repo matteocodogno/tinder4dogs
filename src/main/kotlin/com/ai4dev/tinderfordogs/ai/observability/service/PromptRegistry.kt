@@ -61,7 +61,7 @@ class PromptRegistry(
      */
     fun getBlocking(
         name: String,
-        label: String
+        label: String,
     ): PromptTemplate = runBlocking { get(name, label) }
 
     fun getBlocking(name: String): PromptTemplate = getBlocking(name, defaultLabel)

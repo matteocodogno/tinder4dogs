@@ -25,7 +25,9 @@ class DataCleaner {
             examples.filter { ex ->
                 val roles = ex.messages.map { it.role }
                 val valid =
-                    "system" in roles && "user" in roles && "assistant" in roles &&
+                    "system" in roles &&
+                        "user" in roles &&
+                        "assistant" in roles &&
                         ex.messages.all { it.content.isNotBlank() }
                 if (!valid) removedFormat++
                 valid

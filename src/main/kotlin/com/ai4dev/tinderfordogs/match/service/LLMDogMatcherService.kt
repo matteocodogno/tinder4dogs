@@ -5,7 +5,6 @@ import com.ai4dev.tinderfordogs.ai.common.model.Message
 import com.ai4dev.tinderfordogs.ai.common.service.LiteLLMService
 import com.ai4dev.tinderfordogs.ai.observability.service.PromptRegistry
 import com.ai4dev.tinderfordogs.dogprofile.model.DogProfile
-import com.ai4dev.tinderfordogs.match.model.DogMatchEntry
 import com.ai4dev.tinderfordogs.match.model.LLMCompatibilityResult
 import com.ai4dev.tinderfordogs.match.service.CompatibilityScorer
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper

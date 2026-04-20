@@ -22,8 +22,6 @@ import org.mockito.Mockito
 import org.mockito.Mockito.`when`
 import org.mockito.junit.jupiter.MockitoExtension
 import java.util.UUID
-import kotlin.uuid.Uuid
-import kotlin.uuid.toJavaUuid
 
 @ExtendWith(MockitoExtension::class)
 class LLMDogMatcherServiceTest {
