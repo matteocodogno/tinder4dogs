@@ -178,8 +178,9 @@ class LangfuseService(
 
     fun startTrace(
         name: String,
-        sessionId: String,
+        sessionId: String? = null,
         input: Map<String, Any>,
+        output: Map<String, Any>? = null,
     ): String {
         val traceId = UUID.randomUUID().toString()
 
@@ -189,8 +190,17 @@ class LangfuseService(
                 TraceBody
                     .builder()
                     .name(Optional.of(name))
-                    .sessionId(Optional.of(sessionId))
+                    .apply {
+                        sessionId?.let { sessionId ->
+                            sessionId(Optional.of(sessionId))
+                        }
+                    }
                     .input(Optional.ofNullable(input))
+                    .apply {
+                        output?.let { output ->
+                            output(Optional.of(output))
+                        }
+                    }
                     .build()
             val traceEvent =
                 TraceEvent

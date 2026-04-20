@@ -4,6 +4,7 @@ import com.ai4dev.tinderfordogs.ai.common.model.ChatRequest
 import com.ai4dev.tinderfordogs.ai.common.model.Message
 import com.ai4dev.tinderfordogs.ai.common.service.LiteLLMService
 import com.ai4dev.tinderfordogs.ai.observability.model.PromptResult
+import com.ai4dev.tinderfordogs.ai.observability.model.PromptTemplate
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import java.time.Instant
@@ -41,7 +42,7 @@ class TracedPromptExecutor(
 
         // 2. Fetch template from Langfuse (with YAML fallback)
         val template = registry.get(promptId, label)
-        val userMessage = renderTemplate(template.userTemplate, variables)
+        val userMessage = template.renderTemplate(variables)
 
         // 3. Start trace — include prompt linkage for native Langfuse tracking
         val traceId =
@@ -104,9 +105,10 @@ class TracedPromptExecutor(
             promptVersion = template.version,
         )
     }
-
-    private fun renderTemplate(
-        template: String,
-        variables: Map<String, String>,
-    ): String = variables.entries.fold(template) { acc, (key, value) -> acc.replace("{{$key}}", value) }
 }
+
+fun PromptTemplate.renderTemplate(variables: Map<String, String>): String =
+    variables.entries
+        .fold(userTemplate) { acc, (key, value) ->
+            acc.replace("{{$key}}", value)
+        }

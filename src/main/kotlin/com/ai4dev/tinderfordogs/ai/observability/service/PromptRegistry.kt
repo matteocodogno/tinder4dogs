@@ -82,7 +82,8 @@ class PromptRegistry(
                     snapshots[t.id] = t
                     logger.info { "Loaded YAML snapshot: ${t.id} v${t.version}" }
                 }.onFailure {
-                    error { "Failed to load YAML snapshot ${resource.filename}: ${it.message}" }
+                    logger.error(it) { "Failed to load YAML snapshot ${resource.filename}: ${it.message}" }
+                    throw IllegalStateException("Failed to load YAML snapshot ${resource.filename}", it)
                 }
             }
         return snapshots
