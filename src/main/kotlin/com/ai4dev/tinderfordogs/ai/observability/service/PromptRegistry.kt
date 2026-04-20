@@ -61,8 +61,10 @@ class PromptRegistry(
      */
     fun getBlocking(
         name: String,
-        label: String = defaultLabel,
+        label: String
     ): PromptTemplate = runBlocking { get(name, label) }
+
+    fun getBlocking(name: String): PromptTemplate = getBlocking(name, defaultLabel)
 
     fun listAll(): List<String> = yamlFallbacks.keys.toList()
 
