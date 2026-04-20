@@ -4,7 +4,7 @@ import com.ai4dev.tinderfordogs.dogprofile.model.DogGender
 import com.ai4dev.tinderfordogs.dogprofile.model.DogProfile
 import com.ai4dev.tinderfordogs.dogprofile.model.DogSize
 import com.ai4dev.tinderfordogs.dogprofile.repository.DogProfileRepository
-import com.ai4dev.tinderfordogs.match.model.Dog
+import com.ai4dev.tinderfordogs.match.model.toDogProfile
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -16,13 +16,14 @@ import org.springframework.test.context.DynamicPropertySource
 import org.testcontainers.containers.PostgreSQLContainer
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
+import kotlin.collections.sortedDescending
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 
 @DataJpaTest
 @Testcontainers
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-@Import(DogMatcherService::class)
+@Import(DogMatchService::class)
 class DogMatcherServiceIntegrationTest {
     companion object {
         @Container
@@ -42,7 +43,7 @@ class DogMatcherServiceIntegrationTest {
     private lateinit var dogProfileRepository: DogProfileRepository
 
     @Autowired
-    private lateinit var dogMatcherService: DogMatcherService
+    private lateinit var dogMatcherService: DogMatchService
 
     @BeforeEach
     fun clearDatabase() {
@@ -52,7 +53,7 @@ class DogMatcherServiceIntegrationTest {
     @Test
     fun shouldReturnTopThreeMatchesExcludingSubjectDogOrderedByCompatibilityDescending() {
         // Given — subject dog saved with name label "dog-42"; id is a generated UUID
-        val subjectProfile =
+        val subjectDog =
             dogProfileRepository.save(
                 DogProfile(name = "dog-42", breed = "Labrador", size = DogSize.MEDIUM, age = 3, gender = DogGender.MALE),
             )
@@ -71,37 +72,21 @@ class DogMatcherServiceIntegrationTest {
             ),
         )
 
-        val subjectDog = subjectProfile.toDog()
-        val candidates =
-            dogProfileRepository
-                .findAll()
-                .filter { it.id != subjectProfile.id }
-                .map { it.toDog() }
-
         // When
-        val results = dogMatcherService.findBestMatches(subjectDog, candidates, 3)
+        val results = dogMatcherService.findMatches(subjectDog.id!!, 3)
 
         // Then — exactly 3 results
-        assertEquals(3, results.size, "Expected exactly 3 matches")
+        assertEquals(3, results.matches.size, "Expected exactly 3 matches")
 
         // None of the results is the subject dog
-        assertFalse(results.any { it.id == subjectDog.id }, "Subject dog must not appear in results")
+        assertFalse(results.matches.any { it.id == subjectDog.id }, "Subject dog must not appear in results")
 
         // Results are ordered by compatibility score descending
-        val scores = results.map { dogMatcherService.calculateCompatibility(subjectDog, it) }
+        val scores = results.matches.map { CompatibilityScorer.score(subjectDog, it.toDogProfile()) }
         assertEquals(
             scores,
             scores.sortedDescending(),
             "Results must be ordered by compatibility score descending, got: $scores",
         )
     }
-
-    private fun DogProfile.toDog(): Dog =
-        Dog(
-            id = requireNotNull(id) { "DogProfile must have an id after save" },
-            name = name,
-            breed = breed,
-            age = age,
-            gender = gender.name,
-        )
 }
