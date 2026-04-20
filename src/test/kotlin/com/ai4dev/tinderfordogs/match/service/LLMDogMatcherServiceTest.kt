@@ -19,6 +19,9 @@ import org.mockito.Mock
 import org.mockito.Mockito
 import org.mockito.Mockito.`when`
 import org.mockito.junit.jupiter.MockitoExtension
+import java.util.UUID
+import kotlin.uuid.Uuid
+import kotlin.uuid.toJavaUuid
 
 @ExtendWith(MockitoExtension::class)
 class LLMDogMatcherServiceTest {
@@ -60,8 +63,8 @@ class LLMDogMatcherServiceTest {
 
     @Test
     fun `should return LLM compatibility result on successful chat completion`() {
-        val dog1 = Dog(1L, "Buddy", "Golden Retriever", 3, "Male", listOf("Fetch", "Running"))
-        val dog2 = Dog(2L, "Bella", "Labrador", 2, "Female", listOf("Swimming", "Fetch"))
+        val dog1 = Dog(UUID.randomUUID(), "Buddy", "Golden Retriever", 3, "Male", listOf("Fetch", "Running"))
+        val dog2 = Dog(UUID.randomUUID(), "Bella", "Labrador", 2, "Female", listOf("Swimming", "Fetch"))
 
         val template = PromptTemplate(
             id = "dog-matcher",
@@ -92,8 +95,8 @@ class LLMDogMatcherServiceTest {
 
     @Test
     fun `should fallback to heuristic matcher when LiteLLMService throws exception`() {
-        val dog1 = Dog(1L, "Max", "Poodle", 4, "Male", listOf("Walking"))
-        val dog2 = Dog(2L, "Lucy", "Poodle", 3, "Female", listOf("Walking"))
+        val dog1 = Dog(UUID.randomUUID(), "Max", "Poodle", 4, "Male", listOf("Walking"))
+        val dog2 = Dog(UUID.randomUUID(), "Lucy", "Poodle", 3, "Female", listOf("Walking"))
 
         val template = PromptTemplate(
             id = "dog-matcher",
