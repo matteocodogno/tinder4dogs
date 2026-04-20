@@ -1,7 +1,9 @@
 package com.ai4dev.tinderfordogs.match.model
 
+import java.util.UUID
+
 data class Dog(
-    val id: Long,
+    val id: UUID,
     val name: String,
     val breed: String,
     val age: Int,
