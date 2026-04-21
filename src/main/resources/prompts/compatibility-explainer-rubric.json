@@ -1,0 +1,55 @@
+{
+  "rubric_id": "compatibility-explainer-v1",
+  "prompt_id": "compatibility-explainer",
+  "prompt_version": "1",
+  "description": "Five independent 0/1 criteria for evaluating a single LLM response from the compatibility-explainer prompt. Each criterion can be scored without reference to the others. Total score = sum of criteria (0–5).",
+  "inputs_required": ["dogA.name", "dogB.name", "dogA.breed", "dogB.breed", "score"],
+  "criteria": [
+    {
+      "id": "sentence_count",
+      "name": "Length constraint satisfied",
+      "description": "The response contains exactly 2 to 5 sentences, as required by the hard rule.",
+      "how_to_evaluate": "Split the response on sentence-ending punctuation (., !, ?). Count resulting non-empty sentences. Parenthetical sentences and em-dash clauses do not count as separate sentences.",
+      "score_1": "Sentence count is between 2 and 5 inclusive.",
+      "score_0": "Sentence count is fewer than 2 or more than 5."
+    },
+    {
+      "id": "both_dogs_named",
+      "name": "Both dogs named at least once",
+      "description": "Each dog's name from the input appears at least once anywhere in the response body.",
+      "how_to_evaluate": "Perform a case-insensitive substring search for dogA.name and dogB.name independently. Each must appear at least once.",
+      "score_1": "Both dogA.name and dogB.name are present in the response.",
+      "score_0": "At least one of the two names is absent from the response."
+    },
+    {
+      "id": "no_forbidden_terms",
+      "name": "No score words or numeric figures",
+      "description": "The response must not contain the words 'score', 'rating', 'compatibility score', or any digit sequence.",
+      "how_to_evaluate": "Check case-insensitively for the substrings 'score', 'rating'. Then check for any Arabic numeral digit (0–9) appearing anywhere in the text, including fractions, ranges, or slash notation (e.g. '7/10', '85', '50-79').",
+      "score_1": "None of 'score', 'rating', or any digit appear anywhere in the response.",
+      "score_0": "At least one forbidden substring or digit is present."
+    },
+    {
+      "id": "breed_fidelity",
+      "name": "No hallucinated breeds",
+      "description": "Only the two breeds explicitly provided as dogA.breed and dogB.breed may appear in the response. No other breed names, common nicknames, or inferred breeds are permitted.",
+      "how_to_evaluate": "Extract all breed nouns from the response (e.g. 'Labrador', 'Golden', 'retriever'). Accept partial matches and standard abbreviations of the two input breeds (e.g. 'Golden' for 'Golden Retriever'). Reject any breed word that cannot be mapped back to dogA.breed or dogB.breed.",
+      "score_1": "Every breed word in the response maps to dogA.breed or dogB.breed.",
+      "score_0": "The response introduces any breed not derivable from the two input breeds."
+    },
+    {
+      "id": "tone_calibration",
+      "name": "Tone matches score band",
+      "description": "The emotional register of the response must match the band that contains the numeric input score: 80–100 → warm and enthusiastic; 50–79 → balanced and cautiously positive; 20–49 → neutral and frank; 0–19 → direct and honest without false encouragement.",
+      "how_to_evaluate": "Look up the band from the input score. Read the full response and judge overall register. A response that is markedly more optimistic or more pessimistic than its band warrants is a fail. Borderline scores (e.g. 50, 80) may lean toward either adjacent band.",
+      "bands": {
+        "80-100": "Warm, enthusiastic, optimistic. Phrases like 'great match', 'would love', 'perfect pair' are appropriate.",
+        "50-79": "Balanced, honest, cautiously positive. Acknowledges some friction while finding genuine common ground.",
+        "20-49": "Neutral, frank, acknowledges the challenges without softening them.",
+        "0-19": "Direct and honest. Does not encourage the match but is not cruel or dismissive."
+      },
+      "score_1": "The overall register clearly fits the expected band for the given score.",
+      "score_0": "The tone is noticeably too optimistic or too pessimistic relative to the score band."
+    }
+  ]
+}
