@@ -1,6 +1,7 @@
 package com.ai4dev.tinderfordogs.match.service
 
 import com.ai4dev.tinderfordogs.dogprofile.model.DogProfile
+import kotlin.math.abs
 
 object CompatibilityScorer {
     private const val BREED_SCORE = 25.0
@@ -15,7 +16,7 @@ object CompatibilityScorer {
         source: DogProfile,
         candidate: DogProfile,
     ): Double {
-        val ageDiff = source.age - candidate.age
+        val ageDiff = abs(source.age - candidate.age)
         var score = 0.0
         score +=
             when {
