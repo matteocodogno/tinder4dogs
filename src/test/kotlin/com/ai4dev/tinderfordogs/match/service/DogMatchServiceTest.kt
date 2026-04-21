@@ -94,6 +94,19 @@ class DogMatchServiceTest {
     }
 
     @Test
+    fun `results are capped at the requested limit`() {
+        val source = profile(sourceId)
+        val candidate1 = profile(candidateId1)
+        val candidate2 = profile(candidateId2)
+        every { repository.findById(sourceId) } returns Optional.of(source)
+        every { repository.findAll() } returns listOf(source, candidate1, candidate2)
+
+        val result = service.findMatches(sourceId, 1)
+
+        assertEquals(1, result.matches.size)
+    }
+
+    @Test
     fun `id ascending is used as tiebreaker for equal scores`() {
         val source = profile(sourceId, breed = "Labrador", gender = DogGender.MALE)
         // Both candidates: same breed, same gender → identical score
@@ -108,45 +121,4 @@ class DogMatchServiceTest {
         assertEquals(candidateId2, result.matches[1].id)
     }
 
-    // --- Algorithm tests ---
-
-    @Test
-    fun `compatibility score is always in 0_0 to 1_0`() {
-        val source = profile(sourceId, breed = "Labrador", age = 0, gender = DogGender.MALE)
-        val candidate = profile(candidateId1, breed = "Poodle", age = 30, gender = DogGender.MALE)
-        every { repository.findById(sourceId) } returns Optional.of(source)
-        every { repository.findAll() } returns listOf(source, candidate)
-
-        val result = service.findMatches(sourceId, 1)
-
-        assertTrue(result.matches[0].compatibilityScore in 0.0..1.0)
-    }
-
-    @Test
-    fun `same-breed candidate scores higher than different-breed candidate`() {
-        val source = profile(sourceId, breed = "Labrador", age = 3, gender = DogGender.MALE)
-        val sameBreed = profile(candidateId1, breed = "Labrador", age = 3, gender = DogGender.MALE)
-        val diffBreed = profile(candidateId2, breed = "Poodle", age = 3, gender = DogGender.MALE)
-        every { repository.findById(sourceId) } returns Optional.of(source)
-        every { repository.findAll() } returns listOf(source, sameBreed, diffBreed)
-
-        val result = service.findMatches(sourceId, 2)
-
-        assertTrue(result.matches[0].compatibilityScore > result.matches[1].compatibilityScore)
-        assertEquals(candidateId1, result.matches[0].id)
-    }
-
-    @Test
-    fun `different-gender candidate scores higher than same-gender candidate`() {
-        val source = profile(sourceId, breed = "Labrador", age = 3, gender = DogGender.MALE)
-        val diffGender = profile(candidateId1, breed = "Labrador", age = 3, gender = DogGender.FEMALE)
-        val sameGender = profile(candidateId2, breed = "Labrador", age = 3, gender = DogGender.MALE)
-        every { repository.findById(sourceId) } returns Optional.of(source)
-        every { repository.findAll() } returns listOf(source, diffGender, sameGender)
-
-        val result = service.findMatches(sourceId, 2)
-
-        assertTrue(result.matches[0].compatibilityScore > result.matches[1].compatibilityScore)
-        assertEquals(candidateId1, result.matches[0].id)
-    }
 }

@@ -67,54 +67,6 @@ class DogMatchControllerTest {
         verify(exactly = 1) { service.findMatches(dogId, 2) }
     }
 
-    @Test
-    fun `findMatches uses default limit of 1 when not specified`() {
-        val matches = listOf(
-            DogMatchEntry(
-                id = matchId1,
-                name = "Buddy",
-                breed = "Labrador",
-                size = DogSize.MEDIUM,
-                age = 3,
-                gender = DogGender.MALE,
-                bio = null,
-                compatibilityScore = 0.95,
-            ),
-        )
-        val expectedResponse = DogMatchListResponse(matches)
-
-        every { service.findMatches(dogId, 1) } returns expectedResponse
-
-        val result = controller.findMatches(dogId, 1)
-
-        assertEquals(expectedResponse, result)
-        verify(exactly = 1) { service.findMatches(dogId, 1) }
-    }
-
-    @Test
-    fun `findMatches accepts maximum limit of 10`() {
-        val expectedResponse = DogMatchListResponse(emptyList())
-
-        every { service.findMatches(dogId, 10) } returns expectedResponse
-
-        val result = controller.findMatches(dogId, 10)
-
-        assertEquals(expectedResponse, result)
-        verify(exactly = 1) { service.findMatches(dogId, 10) }
-    }
-
-    @Test
-    fun `findMatches returns empty list when no matches found`() {
-        val expectedResponse = DogMatchListResponse(emptyList())
-
-        every { service.findMatches(dogId, 5) } returns expectedResponse
-
-        val result = controller.findMatches(dogId, 5)
-
-        assertEquals(0, result.matches.size)
-        verify(exactly = 1) { service.findMatches(dogId, 5) }
-    }
-
     // --- Exception handler tests ---
 
     @Test

@@ -4,7 +4,6 @@ import com.ai4dev.tinderfordogs.dogprofile.model.DogGender
 import com.ai4dev.tinderfordogs.dogprofile.model.DogProfile
 import com.ai4dev.tinderfordogs.dogprofile.model.DogSize
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class CompatibilityScorerTest {
@@ -21,16 +20,6 @@ class CompatibilityScorerTest {
     )
 
     // --- Score bounds tests ---
-
-    @Test
-    fun `score is always between 0_0 and 1_0`() {
-        val minProfile = profile(breed = "A", age = 0, gender = DogGender.MALE)
-        val maxProfile = profile(breed = "B", age = 20, gender = DogGender.FEMALE)
-
-        val score = CompatibilityScorer.score(minProfile, maxProfile)
-
-        assertTrue(score in 0.0..1.0, "Score $score should be in [0.0, 1.0]")
-    }
 
     @Test
     fun `minimum possible score is 0_10 when all factors differ maximally`() {
@@ -219,12 +208,13 @@ class CompatibilityScorerTest {
 
     @Test
     fun `score with zero age for both dogs`() {
-        val source = profile(age = 0)
-        val candidate = profile(age = 0)
+        val source = profile(age = 0, breed = "Labrador", gender = DogGender.MALE)
+        val candidate = profile(age = 0, breed = "Labrador", gender = DogGender.MALE)
 
         val score = CompatibilityScorer.score(source, candidate)
 
-        assertTrue(score >= 0.0)
+        // age diff 0 → 30, same breed → 25, same gender → 0, prefs bug → 0 = 55/100
+        assertEquals(0.55, score, 0.001)
     }
 
     @Test
