@@ -29,10 +29,8 @@ class CompatibilityScorerPropertyTest :
                 )
             }
 
-        // BUG: age diff uses signed subtraction — score(A,B) ≠ score(B,A) when |age| crosses a bucket boundary.
-        // Example: A.age=0, B.age=6 → score(A,B) uses diff -6 (< 2 → 30pts) vs score(B,A) uses diff +6 (else → 10pts).
         "Symmetry: score(A, B) == score(B, A)" - {
-            "fails due to signed age subtraction (documents known bug)".config(enabled = false) {
+            "holds for all profiles with absolute age difference" {
                 checkAll(arbProfile, arbProfile) { a: DogProfile, b: DogProfile ->
                     CompatibilityScorer.score(a, b) shouldBe CompatibilityScorer.score(b, a)
                 }
