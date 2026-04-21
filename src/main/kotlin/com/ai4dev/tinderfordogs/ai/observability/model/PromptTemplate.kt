@@ -5,6 +5,7 @@ enum class PromptRole {
     SECURITY_ENGINEER,
     QA,
     ARCHITECT,
+    MATCHMAKING_ASSISTANT,
 }
 
 enum class OutputFormat {

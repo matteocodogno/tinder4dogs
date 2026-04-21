@@ -1,0 +1,38 @@
+# src/main/resources/prompts/dog-matcher.yaml
+id: dog-matcher
+version: 1
+role: DEVELOPER
+outputFormat: JSON
+model: gpt-4o
+maxTokens: 500
+temperature: 0.2
+topP: 0.9
+tags: [matching, dogs, llm]
+changelog: "Initial version for dog compatibility matching"
+
+systemPrompt: |
+    You are an expert dog behaviorist and matchmaker.
+    Analyze the profiles of two dogs and calculate their compatibility score between 0 and 100.
+    Provide a textual explanation explaining why the compatibility score was assigned, highlighting specific factors like shared energy levels or complementary temperaments.
+    Return ONLY a valid JSON object matching this schema:
+    {
+      "score": <integer 0-100>,
+      "reasoning": "<string explanation>"
+    }
+
+userTemplate: |
+    Dog 1:
+    Name: {{dog1_name}}
+    Breed: {{dog1_breed}}
+    Age: {{dog1_age}}
+    Gender: {{dog1_gender}}
+    Preferences/Tags: {{dog1_preferences}}
+    
+    Dog 2:
+    Name: {{dog2_name}}
+    Breed: {{dog2_breed}}
+    Age: {{dog2_age}}
+    Gender: {{dog2_gender}}
+    Preferences/Tags: {{dog2_preferences}}
+    
+    Evaluate their compatibility.

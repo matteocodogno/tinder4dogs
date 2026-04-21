@@ -61,8 +61,10 @@ class PromptRegistry(
      */
     fun getBlocking(
         name: String,
-        label: String = defaultLabel,
+        label: String,
     ): PromptTemplate = runBlocking { get(name, label) }
+
+    fun getBlocking(name: String): PromptTemplate = getBlocking(name, defaultLabel)
 
     fun listAll(): List<String> = yamlFallbacks.keys.toList()
 
@@ -80,7 +82,8 @@ class PromptRegistry(
                     snapshots[t.id] = t
                     logger.info { "Loaded YAML snapshot: ${t.id} v${t.version}" }
                 }.onFailure {
-                    error { "Failed to load YAML snapshot ${resource.filename}: ${it.message}" }
+                    logger.error(it) { "Failed to load YAML snapshot ${resource.filename}: ${it.message}" }
+                    throw IllegalStateException("Failed to load YAML snapshot ${resource.filename}", it)
                 }
             }
         return snapshots
