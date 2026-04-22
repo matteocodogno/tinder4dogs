@@ -11,5 +11,6 @@ data class DogProfileResponse(
     val age: Int,
     val gender: DogGender,
     val bio: String?,
+    val interests: List<String>,
     val createdAt: Instant,
 )

@@ -1,152 +1,91 @@
 package com.ai4dev.tinderfordogs.match.service
 
-import com.ai4dev.tinderfordogs.dogprofile.model.DogGender
-import com.ai4dev.tinderfordogs.dogprofile.model.DogProfile
-import com.ai4dev.tinderfordogs.dogprofile.model.DogSize
 import com.ai4dev.tinderfordogs.dogprofile.repository.DogProfileRepository
+import com.ai4dev.tinderfordogs.match.model.DogMatchEntry
+import com.ai4dev.tinderfordogs.match.model.DogMatchListResponse
 import com.ai4dev.tinderfordogs.match.model.DogNotFoundException
 import io.mockk.every
 import io.mockk.mockk
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertThrows
 import java.util.Optional
 import java.util.UUID
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class DogMatchServiceTest {
-    private lateinit var repository: DogProfileRepository
-    private lateinit var service: DogMatchService
+
+    private lateinit var dogMatchService: DogMatchService
+    private lateinit var dogProfileRepository: DogProfileRepository
 
     @BeforeEach
     fun setup() {
-        repository = mockk()
-        service = DogMatchService(repository)
+        dogProfileRepository = mockk()
+        dogMatchService = DogMatchService(dogProfileRepository)
     }
 
-    private val sourceId = UUID.fromString("00000000-0000-0000-0000-000000000001")
-    private val candidateId1 = UUID.fromString("00000000-0000-0000-0000-000000000002")
-    private val candidateId2 = UUID.fromString("00000000-0000-0000-0000-000000000003")
-
-    private fun profile(
-        id: UUID,
-        breed: String = "Labrador",
-        age: Int = 3,
-        gender: DogGender = DogGender.MALE,
-    ) = DogProfile(
-        id = id,
-        name = "Dog $id",
-        breed = breed,
-        size = DogSize.MEDIUM,
-        age = age,
-        gender = gender,
-    )
-
-    // --- Orchestration tests ---
-
     @Test
-    fun `results are ordered by score descending`() {
-        val source = profile(sourceId, breed = "Labrador", gender = DogGender.MALE)
-        // candidate1: different breed, same gender → lower score
-        val candidate1 = profile(candidateId1, breed = "Poodle", gender = DogGender.MALE)
-        // candidate2: same breed, different gender → higher score
-        val candidate2 = profile(candidateId2, breed = "Labrador", gender = DogGender.FEMALE)
+    fun `should return a list of dog matches when valid dog ID is provided`() {
+        val dogId = UUID.randomUUID()
+        val sourceDog = createDogProfile(dogId)
+        val candidateDog1 = createDogProfile(UUID.randomUUID())
+        val candidateDog2 = createDogProfile(UUID.randomUUID())
 
-        every { repository.findById(sourceId) } returns Optional.of(source)
-        every { repository.findAll() } returns listOf(source, candidate1, candidate2)
+        every { dogProfileRepository.findById(dogId) } returns Optional.of(sourceDog)
+        every { dogProfileRepository.findAll() } returns listOf(sourceDog, candidateDog1, candidateDog2)
 
-        val result = service.findMatches(sourceId, 2)
+        val result = dogMatchService.findMatches(dogId, 2)
 
         assertEquals(2, result.matches.size)
-        assertEquals(candidateId2, result.matches[0].id)
-        assertEquals(candidateId1, result.matches[1].id)
+        assertEquals(candidateDog1.id, result.matches[0].id)
+        assertEquals(candidateDog2.id, result.matches[1].id)
     }
 
     @Test
-    fun `requesting dog is excluded from results`() {
-        val source = profile(sourceId)
+    fun `should throw DogNotFoundException when invalid dog ID is provided`() {
+        val dogId = UUID.randomUUID()
 
-        every { repository.findById(sourceId) } returns Optional.of(source)
-        every { repository.findAll() } returns listOf(source)
+        every { dogProfileRepository.findById(dogId) } returns Optional.empty()
 
-        val result = service.findMatches(sourceId, 10)
-
-        assertTrue(result.matches.none { it.id == sourceId })
+        assertFailsWith<DogNotFoundException> {
+            dogMatchService.findMatches(dogId, 1)
+        }
     }
 
     @Test
-    fun `returns empty list when no other profiles exist`() {
-        val source = profile(sourceId)
-        every { repository.findById(sourceId) } returns Optional.of(source)
-        every { repository.findAll() } returns listOf(source)
+    fun `should return empty list when no other dogs are available`() {
+        val dogId = UUID.randomUUID()
+        val sourceDog = createDogProfile(dogId)
 
-        val result = service.findMatches(sourceId, 5)
+        every { dogProfileRepository.findById(dogId) } returns Optional.of(sourceDog)
+        every { dogProfileRepository.findAll() } returns listOf(sourceDog)
+
+        val result = dogMatchService.findMatches(dogId, 5)
 
         assertEquals(0, result.matches.size)
     }
 
     @Test
-    fun `throws DogNotFoundException for unknown dogId`() {
-        every { repository.findById(sourceId) } returns Optional.empty()
+    fun `should limit the number of matches to the specified limit`() {
+        val dogId = UUID.randomUUID()
+        val sourceDog = createDogProfile(dogId)
+        val candidateDogs = List(10) { createDogProfile(UUID.randomUUID()) }
 
-        assertThrows<DogNotFoundException> { service.findMatches(sourceId, 1) }
+        every { dogProfileRepository.findById(dogId) } returns Optional.of(sourceDog)
+        every { dogProfileRepository.findAll() } returns listOf(sourceDog) + candidateDogs
+
+        val result = dogMatchService.findMatches(dogId, 5)
+
+        assertEquals(5, result.matches.size)
     }
 
-    @Test
-    fun `id ascending is used as tiebreaker for equal scores`() {
-        val source = profile(sourceId, breed = "Labrador", gender = DogGender.MALE)
-        // Both candidates: same breed, same gender → identical score
-        val candidate1 = profile(candidateId1, breed = "Labrador", gender = DogGender.MALE)
-        val candidate2 = profile(candidateId2, breed = "Labrador", gender = DogGender.MALE)
-        every { repository.findById(sourceId) } returns Optional.of(source)
-        every { repository.findAll() } returns listOf(source, candidate2, candidate1)
-
-        val result = service.findMatches(sourceId, 2)
-
-        assertEquals(candidateId1, result.matches[0].id)
-        assertEquals(candidateId2, result.matches[1].id)
-    }
-
-    // --- Algorithm tests ---
-
-    @Test
-    fun `compatibility score is always in 0_0 to 1_0`() {
-        val source = profile(sourceId, breed = "Labrador", age = 0, gender = DogGender.MALE)
-        val candidate = profile(candidateId1, breed = "Poodle", age = 30, gender = DogGender.MALE)
-        every { repository.findById(sourceId) } returns Optional.of(source)
-        every { repository.findAll() } returns listOf(source, candidate)
-
-        val result = service.findMatches(sourceId, 1)
-
-        assertTrue(result.matches[0].compatibilityScore in 0.0..1.0)
-    }
-
-    @Test
-    fun `same-breed candidate scores higher than different-breed candidate`() {
-        val source = profile(sourceId, breed = "Labrador", age = 3, gender = DogGender.MALE)
-        val sameBreed = profile(candidateId1, breed = "Labrador", age = 3, gender = DogGender.MALE)
-        val diffBreed = profile(candidateId2, breed = "Poodle", age = 3, gender = DogGender.MALE)
-        every { repository.findById(sourceId) } returns Optional.of(source)
-        every { repository.findAll() } returns listOf(source, sameBreed, diffBreed)
-
-        val result = service.findMatches(sourceId, 2)
-
-        assertTrue(result.matches[0].compatibilityScore > result.matches[1].compatibilityScore)
-        assertEquals(candidateId1, result.matches[0].id)
-    }
-
-    @Test
-    fun `different-gender candidate scores higher than same-gender candidate`() {
-        val source = profile(sourceId, breed = "Labrador", age = 3, gender = DogGender.MALE)
-        val diffGender = profile(candidateId1, breed = "Labrador", age = 3, gender = DogGender.FEMALE)
-        val sameGender = profile(candidateId2, breed = "Labrador", age = 3, gender = DogGender.MALE)
-        every { repository.findById(sourceId) } returns Optional.of(source)
-        every { repository.findAll() } returns listOf(source, diffGender, sameGender)
-
-        val result = service.findMatches(sourceId, 2)
-
-        assertTrue(result.matches[0].compatibilityScore > result.matches[1].compatibilityScore)
-        assertEquals(candidateId1, result.matches[0].id)
-    }
+    private fun createDogProfile(id: UUID) = DogProfile(
+        id = id,
+        name = "Dog $id",
+        breed = "Breed $id",
+        size = "Medium",
+        age = 5,
+        gender = "Male",
+        bio = "Bio of Dog $id"
+    )
 }

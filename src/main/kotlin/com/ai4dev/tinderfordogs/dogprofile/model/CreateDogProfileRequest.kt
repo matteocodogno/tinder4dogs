@@ -23,4 +23,5 @@ data class CreateDogProfileRequest(
     val gender: DogGender?,
     @field:Size(max = 500)
     val bio: String? = null,
+    val interests: List<@NotBlank @Size(max = 100) String> = emptyList(),
 )

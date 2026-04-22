@@ -24,6 +24,7 @@ class DogProfileService(
                 age = request.age!!,
                 gender = request.gender!!,
                 bio = request.bio,
+                interests = request.interests,
             )
         val saved = repository.save(entity)
         logger.info { "Dog profile created: id=${saved.id}, name=${saved.name}" }
@@ -42,6 +43,7 @@ class DogProfileService(
             age = age,
             gender = gender,
             bio = bio,
+            interests = interests,
             createdAt = createdAt,
         )
 }
