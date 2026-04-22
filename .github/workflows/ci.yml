@@ -1,20 +1,56 @@
-name: AI PR Summary
+name: CI Pipeline
 on:
   pull_request:
     types: [ opened, synchronize ]
+  push:
+    branches: [ main ]
 permissions:
   pull-requests: write
   contents: read
+
 jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+      - name: Install mise
+        run: |
+          curl https://mise.jdx.dev/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Install just
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh | sh -s -- -b /usr/local/bin
+      - name: Install trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y trivy
+      - name: Run CI pipeline
+        run: just ci
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
   summarize:
     runs-on: ubuntu-latest
+    if: always()
+    needs: [ci]
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Generate diff
         run: |
-          git diff origin/${{ github.base_ref }}..HEAD -- '*.kt' '*.ts' '*.yml' > /tmp/pr.diff
+          git diff origin/${{ github.base_ref }}..HEAD -- '*.kt' '*.ts' '*.yml' > /tmp/pr.diff || true
       - name: Generate AI summary
         id: summary
         env:
@@ -35,6 +71,7 @@ jobs:
           echo "$SUMMARY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
       - name: Post or update PR comment
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v8
         with:
           script: |

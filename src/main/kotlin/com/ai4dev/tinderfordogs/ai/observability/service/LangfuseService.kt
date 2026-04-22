@@ -194,14 +194,12 @@ class LangfuseService(
                         sessionId?.let { sessionId ->
                             sessionId(Optional.of(sessionId))
                         }
-                    }
-                    .input(Optional.ofNullable(input))
+                    }.input(Optional.ofNullable(input))
                     .apply {
                         output?.let { output ->
                             output(Optional.of(output))
                         }
-                    }
-                    .build()
+                    }.build()
             val traceEvent =
                 TraceEvent
                     .builder()
