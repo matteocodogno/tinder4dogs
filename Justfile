@@ -337,25 +337,25 @@ _call_ai role prompt_file *metadata:
     done
     META="$META}"
 
-    # Read prompt from file and escape for JSON
-    PROMPT_CONTENT=$(cat "{{prompt_file}}")
-
     # Build complete JSON payload using jq
-    JSON_PAYLOAD=$(jq -n \
+    PAYLOAD_FILE=$(mktemp)
+    trap 'rm -f "$PAYLOAD_FILE"' EXIT
+
+    jq -n \
       --arg model "{{role}}" \
-      --arg content "$PROMPT_CONTENT" \
+      --rawfile content "{{prompt_file}}" \
       --argjson metadata "$META" \
       '{
         model: $model,
         messages: [{role: "user", content: $content}],
         metadata: $metadata
-      }')
+      }' > "$PAYLOAD_FILE"
 
     # Call LiteLLM
     RESPONSE=$(curl -s -X POST {{LITELLM_URL}} \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer {{LITELLM_KEY}}" \
-      -d "$JSON_PAYLOAD")
+      -d "@$PAYLOAD_FILE")
 
     # Check for errors
     if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
@@ -515,156 +515,126 @@ compare-models prompt="Explain what a token is in 2 sentences":
       -d '{"model":"local-fast","messages":[{"role":"user","content":"{{prompt}}"}]}' \
       | jq -r '.choices[0].message.content'
 
-# ============================================
-# ROLE: CHANGELOG (Release Notes)
-# ============================================
-# Internal: Generate changelog content only (no status messages)
-_changelog-generate from_tag to_tag:
+# Generate a GitHub PR description from the current branch diff against main
+pr-summary:
     #!/usr/bin/env bash
     set -euo pipefail
-
-    FROM_TAG="{{from_tag}}"
-    TO_TAG="{{to_tag}}"
-
-    # Verify refs exist
-    if ! git rev-parse --verify "$FROM_TAG" >/dev/null 2>&1; then
-        echo -e "{{ RED }}❌ Invalid ref: $FROM_TAG{{ NC }}" >&2
-        exit 1
-    fi
-
-    if ! git rev-parse --verify "$TO_TAG" >/dev/null 2>&1; then
-        echo -e "{{ RED }}❌ Invalid ref: $TO_TAG{{ NC }}" >&2
-        exit 1
-    fi
-
-    # Get commits between refs (works for tags, branches, commits)
-    COMMITS=$(git log "${FROM_TAG}..${TO_TAG}" --pretty=format:"%s%n%b" --no-merges -- 2>&1)
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    COMMITS=$(git log --oneline main..HEAD)
+    DIFF=$(git diff main..HEAD)
 
     if [ -z "$COMMITS" ]; then
-        echo -e "{{ YELLOW }}⚠️  No commits found between $FROM_TAG and $TO_TAG{{ NC }}" >&2
+        echo "❌ No commits ahead of main"
+        exit 1
+    fi
+
+    TEMPLATE=$(cat prompts/templates/pr_summary.md)
+    PROMPT="${TEMPLATE//\[\[BRANCH\]\]/$BRANCH}"
+    PROMPT="${PROMPT//\[\[COMMITS\]\]/$COMMITS}"
+    PROMPT="${PROMPT//\[\[DIFF\]\]/$DIFF}"
+
+    TEMP_PROMPT=$(mktemp)
+    trap 'rm -f "$TEMP_PROMPT"' EXIT
+    echo "$PROMPT" > "$TEMP_PROMPT"
+
+    echo "🔵 Cloud (ci-summarizer — Claude Sonnet):"
+    just _call_ai ci-summarizer "$TEMP_PROMPT" task=pr_summary branch="$BRANCH"
+
+# generate change logs and pr summary
+# Run Trivy filesystem scan and triage findings with AI
+trivy-ai-triage:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "🔍 Running Trivy scan..."
+    TRIVY_OUTPUT=$(trivy fs . --skip-dirs '.claude' --format json --quiet --no-progress 2>/dev/null)
+
+    VULN_COUNT=$(echo "$TRIVY_OUTPUT" | jq '[.Results[]?.Vulnerabilities // [] | .[]] | length' 2>/dev/null || echo "0")
+    if [ "$VULN_COUNT" -eq 0 ]; then
+        echo "✅ No vulnerabilities found"
         exit 0
     fi
 
-    # Build JSON payload using jq
-    JSON_PAYLOAD=$(jq -n \
-      --arg commits "$COMMITS" \
-      --arg from "$FROM_TAG" \
-      --arg to "$TO_TAG" \
-      '{
-        model: "ci-summarizer",
-        max_tokens: 1000,
-        messages: [
-          {
-            role: "system",
-            content: "Write CHANGELOG.md sections from conventional commits. Group by type (feat, fix, chore, refactor, test, docs, ci, perf). Flag BREAKING CHANGE footers in bold. Use Keep a Changelog format (https://keepachangelog.com). Be concise and user-focused."
-          },
-          {
-            role: "user",
-            content: ("Release " + $to + " from " + $from + ":\n\n" + $commits)
-          }
-        ],
-        metadata: {
-          tags: ["ci", "changelog"],
-          from_tag: $from,
-          to_tag: $to,
-          project: "{{PROJECT_NAME}}"
-        }
-      }')
+    echo "⚠️  Found $VULN_COUNT vulnerability/ies — calling AI triage..."
 
-    # Call LiteLLM
-    RESPONSE=$(curl -s -X POST {{LITELLM_URL}} \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer {{LITELLM_KEY}}" \
-      -d "$JSON_PAYLOAD")
+    TEMPLATE=$(cat prompts/templates/trivy_triage.md)
+    PROMPT="${TEMPLATE//\[\[TRIVY_OUTPUT\]\]/$TRIVY_OUTPUT}"
 
-    # Check for errors
-    if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
-        echo -e "{{ RED }}❌ API Error:{{ NC }}" >&2
-        echo "$RESPONSE" | jq '.error' >&2
-        exit 1
-    fi
+    TEMP_PROMPT=$(mktemp)
+    trap 'rm -f "$TEMP_PROMPT"' EXIT
+    echo "$PROMPT" > "$TEMP_PROMPT"
 
-    # Extract and output changelog content only
-    echo "$RESPONSE" | jq -r '.choices[0].message.content'
+    echo "🔵 Cloud (ci-security-analyst — Claude Sonnet):"
+    just _call_ai ci-security-analyst "$TEMP_PROMPT" task=trivy_triage
 
-# Generate and append changelog to CHANGELOG.md file
-changelog-save from_tag="" to_tag="":
+# Scan current project for secrets, respecting .gitignore
+gitleaks-scan:
     #!/usr/bin/env bash
     set -euo pipefail
-
-    # Determine FROM and TO tags
-    FROM_TAG="{{from_tag}}"
-    TO_TAG="{{to_tag}}"
-
-    if [ -z "$FROM_TAG" ]; then
-        FROM_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
-        if [ -z "$FROM_TAG" ]; then
-            echo -e "{{ RED }}❌ No previous tag found. Specify manually: just changelog-save <from_tag> <to_tag>{{ NC }}"
-            exit 1
-        fi
-    fi
-
-    if [ -z "$TO_TAG" ]; then
-        TO_TAG="HEAD"
-    fi
-
-    echo -e "{{ BLUE }}📝 Generating changelog from $FROM_TAG to $TO_TAG...{{ NC }}"
-
-    # Generate changelog (only content, no status messages)
-    CHANGELOG=$(just _changelog-generate "$FROM_TAG" "$TO_TAG")
-
-    if [ -z "$CHANGELOG" ]; then
-        echo -e "{{ RED }}❌ Failed to generate changelog{{ NC }}"
+    echo "🔐 Running Gitleaks scan (excluding .gitignore files)..."
+    if gitleaks git . --exit-code 1 -l warn; then
+        echo "✅ No secrets detected"
+    else
+        echo "❌ Secrets detected — review the findings above"
         exit 1
     fi
 
-    # Create or update CHANGELOG.md
-    TEMP_FILE=$(mktemp)
-
-    if [ -f "CHANGELOG.md" ]; then
-        # Append to existing file (insert after header and description)
-        if grep -q "^# Changelog" CHANGELOG.md; then
-            # Insert after the header block, before first version section
-            # Save new changelog to temp file first to avoid awk multiline issues
-            NEW_CONTENT_FILE=$(mktemp)
-            echo "$CHANGELOG" > "$NEW_CONTENT_FILE"
-
-            awk -v newfile="$NEW_CONTENT_FILE" '
-                BEGIN { inserted = 0 }
-                # When we find the first version section and havent inserted yet
-                !inserted && /^## \[/ {
-                    print ""
-                    # Read and print the new content from file
-                    while ((getline line < newfile) > 0) {
-                        print line
-                    }
-                    close(newfile)
-                    print ""
-                    inserted = 1
-                }
-                # Print every line
-                { print }
-            ' CHANGELOG.md > "$TEMP_FILE"
-
-            rm -f "$NEW_CONTENT_FILE"
-        else
-            # No header found, prepend
-            echo "$CHANGELOG" > "$TEMP_FILE"
-            echo "" >> "$TEMP_FILE"
-            cat CHANGELOG.md >> "$TEMP_FILE"
-        fi
+change-log :
+    #!/usr/bin/env bash
+    FROM=echo "First: $(git log origin/main..HEAD --reverse --format='%h %s' | head -1)"
+    TO=echo "Last:  $(git log -1 --format='%h %s')"
+    if [ -z "$FROM" ] && [ -z "$TO" ]; then
+        COMMITS=$(git log --oneline main..HEAD)
     else
-        # Create new file
-        echo "# Changelog" > "$TEMP_FILE"
-        echo "" >> "$TEMP_FILE"
-        echo "All notable changes to this project will be documented in this file." >> "$TEMP_FILE"
-        echo "" >> "$TEMP_FILE"
-        echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)," >> "$TEMP_FILE"
-        echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)." >> "$TEMP_FILE"
-        echo "" >> "$TEMP_FILE"
-        echo "$CHANGELOG" >> "$TEMP_FILE"
+        COMMITS=$(git log --oneline $FROM..$TO)
     fi
+    PROMPT="Generate a changelog from these commit messages:\n\n$COMMITS"
+    echo "🔵 Cloud (ci-summarizer — Claude Sonnet):"
+    curl -s -X POST {{LITELLM_URL}} \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer {{LITELLM_KEY}}" \
+      -d "$(jq -n --arg content "$PROMPT" '{"model":"ci-summarizer","messages":[{"role":"user","content":$content}]}')" \
+      | jq -r '.choices[0].message.content'
 
-    mv "$TEMP_FILE" CHANGELOG.md
 
-    echo -e "{{ GREEN }}✅ Changelog saved to CHANGELOG.md{{ NC }}"
+
+
+
+
+# ============================================
+# Linting
+# ============================================
+
+# Check Kotlin style (fails build on violations)
+lint:
+    @echo "{{ BLUE }}🔍 Running ktlint check...{{ NC }}"
+    @./mvnw ktlint:check -q
+    @echo "{{ GREEN }}✅ No lint violations{{ NC }}"
+
+# Auto-fix Kotlin style violations
+lint-fix:
+    @echo "{{ YELLOW }}🔧 Running ktlint format...{{ NC }}"
+    @./mvnw ktlint:format -q
+    @echo "{{ GREEN }}✅ Sources formatted{{ NC }}"
+
+# Pipeline
+# 1 linting, tests, build
+# 2 AI Powered PR summary
+# 3 Trivy scan > AI Triage
+# 4 Gitleaks scan
+# 5 Change log
+# 6 AI Cost computation
+pipeline:
+    @echo "{{ BLUE }}▶ [1/6] Lint + Test + Build{{ NC }}"
+    just lint
+    just test
+    just build-fast
+    @echo "{{ BLUE }}▶ [2/6] AI Powered PR Summary{{ NC }}"
+    just pr-summary
+    @echo "{{ BLUE }}▶ [3/6] Trivy Scan → AI Triage{{ NC }}"
+    just trivy-ai-triage
+    @echo "{{ BLUE }}▶ [4/6] Gitleaks Scan{{ NC }}"
+    just gitleaks-scan
+    @echo "{{ BLUE }}▶ [5/6] Change Log{{ NC }}"
+    just change-log
+    @echo "{{ BLUE }}▶ [6/6] AI Cost Computation{{ NC }}"
+    just ai-costs
