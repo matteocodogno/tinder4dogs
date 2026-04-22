@@ -1,0 +1,36 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/tinderfordogs
+    username: postgres
+    password: postgres
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+
+server:
+  port: 8081
+
+litellm:
+  url: http://localhost:4000
+  key: test-key
+
+openai:
+  api-key: not-set
+
+tinder4dogs:
+  support:
+    model: support-assistant
+
+langfuse:
+  url: http://localhost:3000
+  public_key: test-public-key
+  secret_key: test-secret-key
+  prompt:
+    cache_ttl_seconds: 0
+    label: test
