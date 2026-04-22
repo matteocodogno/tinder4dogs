@@ -1,41 +1,103 @@
-name: AI PR Summary
+name: CI
+
 on:
   pull_request:
-    types: [ opened, synchronize ]
+    types: [opened, synchronize]
+  push:
+    branches: [main]
+
 permissions:
   pull-requests: write
   contents: read
+  security-events: write
+
 jobs:
-  summarize:
+  # ── Lint ──────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ktlint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Run ktlint
+        run: ./mvnw ktlint:check -q
+
+  # ── Test & Build ──────────────────────────────────────────────────────────
+  test-and-build:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: tinderfordogs
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: testpassword
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Run tests
+        env:
+          POSTGRES_URL: jdbc:postgresql://localhost:5433/tinderfordogs
+          POSTGRES_USERNAME: postgres
+          SPRING_DATASOURCE_PASSWORD: testpassword
+        run: ./mvnw test
+      - name: Build
+        run: ./mvnw clean install -DskipTests -q
+
+  # ── PR Summary ────────────────────────────────────────────────────────────
+  pr-summary:
+    name: AI PR Summary
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Generate diff
         run: |
-          git diff origin/${{ github.base_ref }}..HEAD -- '*.kt' '*.ts' '*.yml' > /tmp/pr.diff
+          git diff origin/${{ github.base_ref }}..HEAD -- '*.kt' '*.ts' '*.yml' '*.kts' > /tmp/pr.diff
       - name: Generate AI summary
         id: summary
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           DIFF=$(head -c 12000 /tmp/pr.diff)
+          COMMITS=$(git log origin/${{ github.base_ref }}..HEAD --oneline)
           SUMMARY=$(curl -s https://api.anthropic.com/v1/messages \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -H "content-type: application/json" \
-            -d "$(jq -n --arg diff "$DIFF" --arg title "${{ github.event.pull_request.title }}" '{
+            -d "$(jq -n \
+              --arg diff "$DIFF" \
+              --arg commits "$COMMITS" \
+              --arg title "${{ github.event.pull_request.title }}" '{
               model: "claude-haiku-4-5-20251001",
               max_tokens: 600,
               system: "Summarise PR diffs concisely. Sections: What changed / Why / How to verify. Never invent information not in the diff.",
-              messages: [{role: "user", content: ("PR: " + $title + "\n\nDiff:\n" + $diff)}]
+              messages: [{role: "user", content: ("PR: " + $title + "\n\nCommits:\n" + $commits + "\n\nDiff:\n" + $diff)}]
             }')" | jq -r '.content[0].text')
           echo "summary<<EOF" >> $GITHUB_OUTPUT
           echo "$SUMMARY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
       - name: Post or update PR comment
-        uses: actions/github-script@v8
+        uses: actions/github-script@v7
         with:
           script: |
             const summary = ${{ toJSON(steps.summary.outputs.summary) }};
@@ -50,3 +112,132 @@ jobs:
               await github.rest.issues.createComment(
                 { owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
             }
+
+  # ── Trivy Vulnerability Scan ──────────────────────────────────────────────
+  scan-trivy:
+    name: Trivy Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Trivy (JSON)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          format: json
+          output: trivy-results.json
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+      - name: Run Trivy (table summary)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+      - name: AI triage of CRITICAL findings
+        if: github.event_name == 'pull_request'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          CRITICAL_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results.json 2>/dev/null || echo 0)
+          echo "CRITICAL findings: $CRITICAL_COUNT"
+          if [ "$CRITICAL_COUNT" -eq 0 ]; then
+            echo "No CRITICAL vulnerabilities — skipping AI triage."
+            exit 0
+          fi
+          FINDINGS=$(jq -r '.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL") |
+            "- \(.VulnerabilityID): \(.Title) (pkg=\(.PkgName), fixedIn=\(.FixedVersion // "no fix"))"' \
+            trivy-results.json | head -20)
+          TRIAGE=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$(jq -n --arg findings "$FINDINGS" '{
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 600,
+              system: "Triage CRITICAL security vulnerabilities for a Spring Boot/Kotlin REST API. For each: real exploitability, urgency (URGENT/HIGH/MEDIUM), recommended fix. Be concise.",
+              messages: [{role: "user", content: ("Vulnerabilities:\n" + $findings)}]
+            }')" | jq -r '.content[0].text')
+          echo "## 🔒 AI Security Triage" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "$TRIAGE" >> $GITHUB_STEP_SUMMARY
+      - name: Upload Trivy results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-results
+          path: trivy-results.json
+
+  # ── Gitleaks Secret Detection ─────────────────────────────────────────────
+  scan-secrets:
+    name: Gitleaks Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Changelog (on push to main) ───────────────────────────────────────────
+  changelog:
+    name: Generate Changelog
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test-and-build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate AI changelog
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          COMMITS=$(git log --oneline -20 --no-merges)
+          CHANGELOG=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$(jq -n --arg commits "$COMMITS" '{
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 800,
+              system: "Write CHANGELOG.md sections from conventional commits. Group by type (feat, fix, chore, refactor, test, docs, ci, perf). Flag BREAKING CHANGE footers. Use Keep a Changelog format. Be concise.",
+              messages: [{role: "user", content: ("Latest commits:\n" + $commits)}]
+            }')" | jq -r '.content[0].text')
+          echo "## 📝 Changelog Preview" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "$CHANGELOG" >> $GITHUB_STEP_SUMMARY
+
+  # ── AI Cost Report ────────────────────────────────────────────────────────
+  cost-report:
+    name: AI Cost Report
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test-and-build, scan-trivy, scan-secrets]
+    steps:
+      - name: Fetch Langfuse cost metrics
+        env:
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+        run: |
+          HOST="${LANGFUSE_HOST:-https://cloud.langfuse.com}"
+          FROM_TS=$(date -u -d "-24 hours" "+%Y-%m-%dT%H:%M:%SZ")
+          RESPONSE=$(curl -s \
+            -u "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}" \
+            "${HOST}/api/public/metrics/daily?fromTimestamp=${FROM_TS}" || echo '{}')
+          echo "## 💰 AI Cost Report (last 24h)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if echo "$RESPONSE" | jq -e '.data' > /dev/null 2>&1; then
+            echo "$RESPONSE" | jq -r '
+              (.data // [])[] |
+              "| \(.date) | $\((.totalCost // 0) * 10000 | round / 10000) | \(.inputTokens // 0) | \(.outputTokens // 0) |"
+            ' | { echo "| Date | Cost | Input tokens | Output tokens |"; echo "|------|------|-------------|--------------|"; cat; } >> $GITHUB_STEP_SUMMARY
+            TOTAL=$(echo "$RESPONSE" | jq '[(.data // [])[]?.totalCost // 0] | add // 0 | . * 10000 | round / 10000')
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Total: \$$TOTAL**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "_Langfuse metrics unavailable in this environment._" >> $GITHUB_STEP_SUMMARY
+          fi
