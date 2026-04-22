@@ -287,6 +287,19 @@ dev: check-mise
     @echo "{{ BLUE }}🔄 Starting in dev mode (auto-reload)...{{ NC }}"
     @./mvnw spring-boot:run -Dspring-boot.run.jvmArguments="-Dspring.devtools.restart.enabled=true"
 
+# Run linting with ktlint (fix=true to auto-format)
+lint fix="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "\033[0;34m🔍 Running ktlint...\033[0m"
+    if [ -n "{{fix}}" ]; then
+        echo -e "\033[1;33m✏️  Auto-fixing code style...\033[0m"
+        ./mvnw ktlint:format
+    else
+        ./mvnw ktlint:check
+    fi
+    echo -e "\033[0;32m✅ Linting complete\033[0m"
+
 # Run all tests
 test: check-mise
     @echo "{{ BLUE }}🧪 Running tests...{{ NC }}"
@@ -302,6 +315,52 @@ test-coverage: check-mise
     @echo "{{ BLUE }}🧪 Running tests with coverage...{{ NC }}"
     @./mvnw verify
     @echo "{{ GREEN }}✅ Coverage report: target/site/jacoco/index.html{{ NC }}"
+
+# Complete CI pipeline: lint → test → build
+jest: check-mise
+    @echo "{{ BLUE }}🚀 Running CI pipeline: lint → test → build...{{ NC }}"
+    @just lint
+    @echo ""
+    @just test
+    @echo ""
+    @just build
+    @echo ""
+    @echo "{{ GREEN }}✅ CI pipeline complete{{ NC }}"
+
+# Full CI checks: build → lint → security → costs (fail-fast)
+ci: check-mise
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🚀 Running full CI pipeline...{{ NC }}"
+    echo ""
+
+    # 1. Clean build
+    echo -e "{{ BLUE }}📦 Step 1: Clean build{{ NC }}"
+    just build || exit 1
+    echo ""
+
+    # 2. Lint with auto-fix
+    echo -e "{{ BLUE }}🔍 Step 2: Lint (auto-fix){{ NC }}"
+    just lint fix=true
+    echo ""
+
+    # 3. Security (gitleaks)
+    echo -e "{{ BLUE }}🔐 Step 3: Secret scan (gitleaks){{ NC }}"
+    just gitleaks || exit 1
+    echo ""
+
+    # 4. Vulnerability scan (trivy)
+    echo -e "{{ BLUE }}🔒 Step 4: Vulnerability scan (trivy){{ NC }}"
+    just trivy || exit 1
+    echo ""
+
+    # 5. AI costs
+    echo -e "{{ BLUE }}💰 Step 5: Report AI costs{{ NC }}"
+    COST=$(just ai-cost 2>/dev/null || echo "0.0000")
+    echo "Total cost: $COST"
+    echo ""
+
+    echo -e "{{ GREEN }}✅ CI pipeline passed{{ NC }}"
 
 # Clean build artifacts
 clean:
@@ -498,6 +557,121 @@ gen-tests file:
     echo -e "{{ GREEN }}✅ Tests created at: $TEST_FILE{{ NC }}"
     echo -e "{{ BLUE }}💡 Run tests: just test{{ NC }}"
 
+# ============================================
+# ROLE: WRITER (PR Summary Generation)
+# ============================================
+
+# Generate AI-powered PR summary from current branch diff
+pr-summary:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "\033[0;34m📝 Generating PR summary from current branch...\033[0m"
+    echo ""
+    DIFF=$(git diff origin/main..HEAD 2>/dev/null || git diff HEAD~1..HEAD 2>/dev/null || echo "")
+    if [ -z "$DIFF" ]; then
+        echo -e "\033[1;33m⚠️  No changes found\033[0m"
+        exit 0
+    fi
+    TEMPLATE=$(cat prompts/templates/pr_summary.md)
+    PROMPT="${TEMPLATE//\[\[DIFF\]\]/$DIFF}"
+    PROMPT_FILE=$(mktemp)
+    trap 'rm -f "$PROMPT_FILE"' EXIT
+    echo "$PROMPT" > "$PROMPT_FILE"
+    echo -e "\033[0;34m🤖 Calling AI (writer role) to generate summary...\033[0m"
+    echo ""
+    just _call_ai writer "$PROMPT_FILE" task=pr_summary
+
+# ============================================
+# SECURITY: Gitleaks Secret Detection
+# ============================================
+
+# Run Gitleaks on PR commits with AI triage
+gitleaks:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "\033[0;34m🔐 Running Gitleaks on PR commits...\033[0m"
+    SECRETS=$(gitleaks detect --source . --verbose --report-format json 2>&1 || echo "{}")
+    SECRET_COUNT=$(echo "$SECRETS" | jq '.[] | length' 2>/dev/null || echo "0")
+    if [ "$SECRET_COUNT" = "0" ] || [ -z "$(echo "$SECRETS" | jq -r '.[] // empty' 2>/dev/null)" ]; then
+        echo -e "\033[0;32m✅ No secrets detected\033[0m"
+        exit 0
+    fi
+    echo -e "\033[1;31m🚨 SECRETS FOUND - Running AI triage...\033[0m"
+    echo ""
+    TEMPLATE=$(cat prompts/templates/gitleaks_triage.md)
+    PROMPT="${TEMPLATE//\[\[SECRETS\]\]/$SECRETS}"
+    PROMPT_FILE=$(mktemp)
+    trap 'rm -f "$PROMPT_FILE"' EXIT
+    echo "$PROMPT" > "$PROMPT_FILE"
+    echo -e "\033[0;34m🤖 Calling AI (triage role) for security analysis...\033[0m"
+    echo ""
+    just _call_ai triage "$PROMPT_FILE" task=secret_triage
+    echo ""
+    echo -e "\033[0;31m❌ FAILING BUILD - Secrets must be remediated\033[0m"
+    exit 1
+
+# ============================================
+# ROLE: TRIAGE (Trivy Vulnerability Scanning)
+# ============================================
+
+# Run Trivy vulnerability scanning with AI triage of critical findings
+trivy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "\033[0;34m🔒 Running Trivy vulnerability scan...\033[0m"
+    SCAN_OUTPUT=$(trivy fs . --severity CRITICAL --format json 2>/dev/null || echo "{}")
+    CRITICAL_COUNT=$(echo "$SCAN_OUTPUT" | jq '[.Results[]?.Misconfigurations[]? + .Results[]?.Vulnerabilities[]?] | length' 2>/dev/null || echo "0")
+    if [ "$CRITICAL_COUNT" = "0" ]; then
+        echo -e "\033[0;32m✅ No CRITICAL vulnerabilities found\033[0m"
+        exit 0
+    fi
+    echo -e "\033[1;33m⚠️  Found $CRITICAL_COUNT CRITICAL vulnerabilities\033[0m"
+    echo ""
+    TEMPLATE=$(cat prompts/templates/trivy_triage.md)
+    PROMPT="${TEMPLATE//\[\[VULNERABILITIES\]\]/$SCAN_OUTPUT}"
+    PROMPT_FILE=$(mktemp)
+    trap 'rm -f "$PROMPT_FILE"' EXIT
+    echo "$PROMPT" > "$PROMPT_FILE"
+    echo -e "\033[0;34m🤖 Calling AI (triage role) for vulnerability analysis...\033[0m"
+    echo ""
+    just _call_ai triage "$PROMPT_FILE" task=vulnerability_triage
+
+# ============================================
+# ROLE: CI-SUMMARIZER (Changelog Generation)
+# ============================================
+
+# Generate changelog from git commits
+changelog from="" to="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    FROM="{{from}}"
+    TO="{{to}}"
+    [ -z "$FROM" ] && FROM=$(git describe --tags --abbrev=0 2>/dev/null || echo "HEAD~10")
+    [ -z "$TO" ] && TO="HEAD"
+    echo -e "\033[0;34m📝 Generating changelog from $FROM to $TO...\033[0m"
+    COMMITS=$(git log "$FROM..$TO" --pretty=format:"%s%n%b" --no-merges 2>/dev/null || echo "")
+    if [ -z "$COMMITS" ]; then
+        echo -e "\033[1;33m⚠️  No commits found\033[0m"
+        exit 0
+    fi
+    TEMPLATE=$(cat prompts/templates/changelog.md)
+    PROMPT="${TEMPLATE//\[\[COMMITS\]\]/$COMMITS}"
+    PROMPT_FILE=$(mktemp)
+    trap 'rm -f "$PROMPT_FILE"' EXIT
+    echo "$PROMPT" > "$PROMPT_FILE"
+    CHANGELOG=$(just _call_ai ci-summarizer "$PROMPT_FILE" from="$FROM" to="$TO")
+    echo "$CHANGELOG"
+    if [ -f "CHANGELOG.md" ]; then
+        echo -e "\033[0;34m📄 Updating CHANGELOG.md...\033[0m"
+        { echo "# Changelog"; echo ""; echo "## [$TO] - $(date +%Y-%m-%d)"; echo ""; echo "$CHANGELOG"; echo ""; tail -n +2 CHANGELOG.md; } > CHANGELOG.md.tmp
+        mv CHANGELOG.md.tmp CHANGELOG.md
+        echo -e "\033[0;32m✅ CHANGELOG.md updated\033[0m"
+    else
+        echo -e "\033[0;34m📄 Creating CHANGELOG.md...\033[0m"
+        { echo "# Changelog"; echo ""; echo "## [$TO] - $(date +%Y-%m-%d)"; echo ""; echo "$CHANGELOG"; } > CHANGELOG.md
+        echo -e "\033[0;32m✅ CHANGELOG.md created\033[0m"
+    fi
+
 # Comparison: cloud vs local
 compare-models prompt="Explain what a token is in 2 sentences":
     #!/usr/bin/env bash
@@ -668,3 +842,51 @@ changelog-save from_tag="" to_tag="":
     mv "$TEMP_FILE" CHANGELOG.md
 
     echo -e "{{ GREEN }}✅ Changelog saved to CHANGELOG.md{{ NC }}"
+
+# ============================================
+# COST REPORTING: Langfuse AI Cost Tracking
+# ============================================
+
+# Report AI costs for current run from Langfuse
+ai-cost minutes="5":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    PUBLIC_KEY="${LANGFUSE_PUBLIC_KEY:-}"
+    SECRET_KEY="${LANGFUSE_SECRET_KEY:-}"
+
+    if [ -z "$PUBLIC_KEY" ] || [ -z "$SECRET_KEY" ]; then
+        echo -e "{{ RED }}❌ Langfuse credentials not configured{{ NC }}" >&2
+        echo "   Set LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY" >&2
+        exit 1
+    fi
+
+    # Calculate timestamp from N minutes ago
+    if command -v gdate &> /dev/null; then
+        # macOS with GNU coreutils installed
+        FROM_TIMESTAMP=$(gdate -u -d "{{minutes}} minutes ago" +"%Y-%m-%dT%H:%M:%S.000Z")
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS native date
+        FROM_TIMESTAMP=$(date -u -v-{{minutes}}M +"%Y-%m-%dT%H:%M:%S.000Z")
+    else
+        # Linux
+        FROM_TIMESTAMP=$(date -u -d "{{minutes}} minutes ago" +"%Y-%m-%dT%H:%M:%S.000Z")
+    fi
+
+    # Encode credentials for Basic auth
+    AUTH=$(printf '%s:%s' "$PUBLIC_KEY" "$SECRET_KEY" | base64)
+
+    # Query Langfuse API for traces in the time window
+    RESPONSE=$(curl -s -X GET "http://localhost:8000/api/traces?fromTimestamp=${FROM_TIMESTAMP}" \
+      -H "Authorization: Basic $AUTH" \
+      -H "Content-Type: application/json" 2>/dev/null || echo '{"data":[]}')
+
+    # Extract and sum costs from all traces
+    TOTAL_COST=$(echo "$RESPONSE" | jq '[.data[]?.cost // empty] | add // 0' 2>/dev/null || echo "0")
+
+    # Format output as simple text
+    if (( $(echo "$TOTAL_COST > 0" | bc -l 2>/dev/null || echo "0") )); then
+        printf "\$%.4f\n" "$TOTAL_COST"
+    else
+        echo "0.0000"
+    fi
