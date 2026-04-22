@@ -337,25 +337,25 @@ _call_ai role prompt_file *metadata:
     done
     META="$META}"
 
-    # Read prompt from file and escape for JSON
-    PROMPT_CONTENT=$(cat "{{prompt_file}}")
-
     # Build complete JSON payload using jq
-    JSON_PAYLOAD=$(jq -n \
+    PAYLOAD_FILE=$(mktemp)
+    trap 'rm -f "$PAYLOAD_FILE"' EXIT
+
+    jq -n \
       --arg model "{{role}}" \
-      --arg content "$PROMPT_CONTENT" \
+      --rawfile content "{{prompt_file}}" \
       --argjson metadata "$META" \
       '{
         model: $model,
         messages: [{role: "user", content: $content}],
         metadata: $metadata
-      }')
+      }' > "$PAYLOAD_FILE"
 
     # Call LiteLLM
     RESPONSE=$(curl -s -X POST {{LITELLM_URL}} \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer {{LITELLM_KEY}}" \
-      -d "$JSON_PAYLOAD")
+      -d "@$PAYLOAD_FILE")
 
     # Check for errors
     if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
@@ -514,3 +514,127 @@ compare-models prompt="Explain what a token is in 2 sentences":
       -H "Authorization: Bearer {{LITELLM_KEY}}" \
       -d '{"model":"local-fast","messages":[{"role":"user","content":"{{prompt}}"}]}' \
       | jq -r '.choices[0].message.content'
+
+# Generate a GitHub PR description from the current branch diff against main
+pr-summary:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    COMMITS=$(git log --oneline main..HEAD)
+    DIFF=$(git diff main..HEAD)
+
+    if [ -z "$COMMITS" ]; then
+        echo "❌ No commits ahead of main"
+        exit 1
+    fi
+
+    TEMPLATE=$(cat prompts/templates/pr_summary.md)
+    PROMPT="${TEMPLATE//\[\[BRANCH\]\]/$BRANCH}"
+    PROMPT="${PROMPT//\[\[COMMITS\]\]/$COMMITS}"
+    PROMPT="${PROMPT//\[\[DIFF\]\]/$DIFF}"
+
+    TEMP_PROMPT=$(mktemp)
+    trap 'rm -f "$TEMP_PROMPT"' EXIT
+    echo "$PROMPT" > "$TEMP_PROMPT"
+
+    echo "🔵 Cloud (ci-summarizer — Claude Sonnet):"
+    just _call_ai ci-summarizer "$TEMP_PROMPT" task=pr_summary branch="$BRANCH"
+
+# generate change logs and pr summary
+# Run Trivy filesystem scan and triage findings with AI
+trivy-ai-triage:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "🔍 Running Trivy scan..."
+    TRIVY_OUTPUT=$(trivy fs . --skip-dirs '.claude' --format json --quiet --no-progress 2>/dev/null)
+
+    VULN_COUNT=$(echo "$TRIVY_OUTPUT" | jq '[.Results[]?.Vulnerabilities // [] | .[]] | length' 2>/dev/null || echo "0")
+    if [ "$VULN_COUNT" -eq 0 ]; then
+        echo "✅ No vulnerabilities found"
+        exit 0
+    fi
+
+    echo "⚠️  Found $VULN_COUNT vulnerability/ies — calling AI triage..."
+
+    TEMPLATE=$(cat prompts/templates/trivy_triage.md)
+    PROMPT="${TEMPLATE//\[\[TRIVY_OUTPUT\]\]/$TRIVY_OUTPUT}"
+
+    TEMP_PROMPT=$(mktemp)
+    trap 'rm -f "$TEMP_PROMPT"' EXIT
+    echo "$PROMPT" > "$TEMP_PROMPT"
+
+    echo "🔵 Cloud (ci-security-analyst — Claude Sonnet):"
+    just _call_ai ci-security-analyst "$TEMP_PROMPT" task=trivy_triage
+
+# Scan current project for secrets, respecting .gitignore
+gitleaks-scan:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "🔐 Running Gitleaks scan (excluding .gitignore files)..."
+    if gitleaks git . --exit-code 1 -l warn; then
+        echo "✅ No secrets detected"
+    else
+        echo "❌ Secrets detected — review the findings above"
+        exit 1
+    fi
+
+change-log :
+    #!/usr/bin/env bash
+    FROM=echo "First: $(git log origin/main..HEAD --reverse --format='%h %s' | head -1)"
+    TO=echo "Last:  $(git log -1 --format='%h %s')"
+    if [ -z "$FROM" ] && [ -z "$TO" ]; then
+        COMMITS=$(git log --oneline main..HEAD)
+    else
+        COMMITS=$(git log --oneline $FROM..$TO)
+    fi
+    PROMPT="Generate a changelog from these commit messages:\n\n$COMMITS"
+    echo "🔵 Cloud (ci-summarizer — Claude Sonnet):"
+    curl -s -X POST {{LITELLM_URL}} \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer {{LITELLM_KEY}}" \
+      -d "$(jq -n --arg content "$PROMPT" '{"model":"ci-summarizer","messages":[{"role":"user","content":$content}]}')" \
+      | jq -r '.choices[0].message.content'
+
+
+
+
+
+
+# ============================================
+# Linting
+# ============================================
+
+# Check Kotlin style (fails build on violations)
+lint:
+    @echo "{{ BLUE }}🔍 Running ktlint check...{{ NC }}"
+    @./mvnw ktlint:check -q
+    @echo "{{ GREEN }}✅ No lint violations{{ NC }}"
+
+# Auto-fix Kotlin style violations
+lint-fix:
+    @echo "{{ YELLOW }}🔧 Running ktlint format...{{ NC }}"
+    @./mvnw ktlint:format -q
+    @echo "{{ GREEN }}✅ Sources formatted{{ NC }}"
+
+# Pipeline
+# 1 linting, tests, build
+# 2 AI Powered PR summary
+# 3 Trivy scan > AI Triage
+# 4 Gitleaks scan
+# 5 Change log
+# 6 AI Cost computation
+pipeline:
+    @echo "{{ BLUE }}▶ [1/6] Lint + Test + Build{{ NC }}"
+    just lint
+    just test
+    just build-fast
+    @echo "{{ BLUE }}▶ [2/6] AI Powered PR Summary{{ NC }}"
+    just pr-summary
+    @echo "{{ BLUE }}▶ [3/6] Trivy Scan → AI Triage{{ NC }}"
+    just trivy-ai-triage
+    @echo "{{ BLUE }}▶ [4/6] Gitleaks Scan{{ NC }}"
+    just gitleaks-scan
+    @echo "{{ BLUE }}▶ [5/6] Change Log{{ NC }}"
+    just change-log
+    @echo "{{ BLUE }}▶ [6/6] AI Cost Computation{{ NC }}"
+    just ai-costs
