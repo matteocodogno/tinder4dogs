@@ -947,6 +947,110 @@ ci-fix run_id="":
         echo -e "{{ YELLOW }}Skipped. Run 'just ci-watch' after your push.{{ NC }}"
     fi
 
+# Stage all changes, AI commit, push, watch all CI stages, save logs to .github/actions/logs/
+push-watch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if ! command -v gh &>/dev/null; then
+        echo -e "{{ RED }}❌ gh CLI not found — install with: brew install gh && gh auth login{{ NC }}"
+        exit 1
+    fi
+
+    BRANCH=$(git branch --show-current)
+
+    # ── Commit (skip if nothing to commit) ───────────────────────────────────
+    if [ -n "$(git status --porcelain)" ]; then
+        echo -e "{{ BLUE }}📦 Staging all changes...{{ NC }}"
+        git add -A
+
+        echo -e "{{ BLUE }}💬 Generating commit message...{{ NC }}"
+        MSG=$(just commit-msg)
+        echo -e "{{ BLUE }}📝 Commit:{{ NC }} $MSG"
+        echo ""
+        git commit -m "$MSG"
+    else
+        echo -e "{{ YELLOW }}⚠️  Nothing to commit — proceeding to push{{ NC }}"
+    fi
+
+    # ── Push ─────────────────────────────────────────────────────────────────
+    echo -e "{{ BLUE }}🚀 Pushing $BRANCH...{{ NC }}"
+    git push
+
+    # ── Wait for GitHub to register the new run ───────────────────────────────
+    echo -e "{{ BLUE }}⏳ Waiting for GitHub Actions to register the run...{{ NC }}"
+    sleep 8
+
+    RUN_JSON=$(gh run list --branch "$BRANCH" --limit 1 --json databaseId,url,status)
+    RUN_ID=$(echo "$RUN_JSON" | jq -r '.[0].databaseId')
+    RUN_URL=$(echo "$RUN_JSON" | jq -r '.[0].url')
+
+    if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+        echo -e "{{ RED }}❌ No CI run found for '$BRANCH' — check GitHub Actions manually{{ NC }}"
+        exit 1
+    fi
+
+    echo -e "{{ BLUE }}🔗 Run:{{ NC }} $RUN_URL"
+    echo ""
+
+    # ── Prepare log file ─────────────────────────────────────────────────────
+    LOG_DIR=".github/actions/logs"
+    mkdir -p "$LOG_DIR"
+    LOG_FILE="$LOG_DIR/run-${RUN_ID}-$(date +%Y%m%d-%H%M%S).log"
+
+    {
+        echo "Branch : $BRANCH"
+        echo "Run ID : $RUN_ID"
+        echo "URL    : $RUN_URL"
+        echo "Date   : $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "========================================"
+        echo ""
+    } > "$LOG_FILE"
+
+    # ── Watch (live in terminal) ──────────────────────────────────────────────
+    echo -e "{{ BLUE }}👀 Watching CI stages (Ctrl-C to detach)...{{ NC }}"
+    echo ""
+
+    WATCH_EXIT=0
+    gh run watch "$RUN_ID" --exit-status || WATCH_EXIT=$?
+
+    # ── Save post-run job summary ─────────────────────────────────────────────
+    {
+        echo "========================================"
+        echo "JOB SUMMARY"
+        echo "========================================"
+        echo ""
+        gh run view "$RUN_ID" 2>&1
+        echo ""
+    } >> "$LOG_FILE"
+
+    # ── Save full step-by-step logs ───────────────────────────────────────────
+    echo -e "{{ BLUE }}📥 Saving full step logs to $LOG_FILE...{{ NC }}"
+    {
+        echo "========================================"
+        echo "STEP LOGS"
+        echo "========================================"
+        echo ""
+        if [ $WATCH_EXIT -ne 0 ]; then
+            gh run view "$RUN_ID" --log-failed 2>&1 || true
+        else
+            gh run view "$RUN_ID" --log 2>&1 || true
+        fi
+    } >> "$LOG_FILE"
+
+    echo -e "{{ GREEN }}✅ Logs saved: $LOG_FILE{{ NC }}"
+    echo ""
+
+    # ── On failure → AI triage ────────────────────────────────────────────────
+    if [ $WATCH_EXIT -ne 0 ]; then
+        echo -e "{{ RED }}❌ CI failed — running AI analysis...{{ NC }}"
+        echo ""
+        just ci-fix "$RUN_ID"
+        exit 1
+    fi
+
+    echo -e "{{ GREEN }}🎉 CI passed on $BRANCH{{ NC }}"
+
 # ============================================
 # ROLE: CHANGELOG (Release Notes)
 # ============================================

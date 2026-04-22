@@ -38,3 +38,4 @@ build/
 
 ### AI output ###
 reviews
+.github/actions/logs/
