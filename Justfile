@@ -514,3 +514,19 @@ compare-models prompt="Explain what a token is in 2 sentences":
       -H "Authorization: Bearer {{LITELLM_KEY}}" \
       -d '{"model":"local-fast","messages":[{"role":"user","content":"{{prompt}}"}]}' \
       | jq -r '.choices[0].message.content'
+
+# generate change logs and pr summary
+change-log FROM="" TO="":
+    #!/usr/bin/env bash
+    if [ -z "{{FROM}}" ] && [ -z "{{TO}}" ]; then
+        COMMITS=$(git log --oneline main..HEAD)
+    else
+        COMMITS=$(git log --oneline {{FROM}}..{{TO}})
+    fi
+    PROMPT="Generate a changelog from these commit messages:\n\n$COMMITS"
+    echo "🔵 Cloud (ci-summarizer — Claude Sonnet):"
+    curl -s -X POST {{LITELLM_URL}} \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer {{LITELLM_KEY}}" \
+      -d "$(jq -n --arg content "$PROMPT" '{"model":"ci-summarizer","messages":[{"role":"user","content":$content}]}')" \
+      | jq -r '.choices[0].message.content'
