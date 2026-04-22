@@ -93,7 +93,9 @@ class LangfuseService(
                     version = textPrompt.version,
                     type = "text",
                     prompt = textPrompt.prompt,
-                    config = (textPrompt.config as? Map<*, *>)?.mapKeys { it.key.toString() }?.mapValues { it.value ?: "" } ?: emptyMap(),
+                    config =
+                        (textPrompt.config as? Map<*, *>)?.mapKeys { it.key.toString() }?.mapValues { it.value ?: "" }
+                            ?: emptyMap(),
                     labels = textPrompt.labels,
                     tags = textPrompt.tags,
                 )
@@ -106,7 +108,9 @@ class LangfuseService(
                     version = chatPrompt.version,
                     type = "chat",
                     prompt = chatPrompt.prompt,
-                    config = (chatPrompt.config as? Map<*, *>)?.mapKeys { it.key.toString() }?.mapValues { it.value ?: "" } ?: emptyMap(),
+                    config =
+                        (chatPrompt.config as? Map<*, *>)?.mapKeys { it.key.toString() }?.mapValues { it.value ?: "" }
+                            ?: emptyMap(),
                     labels = chatPrompt.labels,
                     tags = chatPrompt.tags,
                 )
@@ -194,14 +198,12 @@ class LangfuseService(
                         sessionId?.let { sessionId ->
                             sessionId(Optional.of(sessionId))
                         }
-                    }
-                    .input(Optional.ofNullable(input))
+                    }.input(Optional.ofNullable(input))
                     .apply {
                         output?.let { output ->
                             output(Optional.of(output))
                         }
-                    }
-                    .build()
+                    }.build()
             val traceEvent =
                 TraceEvent
                     .builder()

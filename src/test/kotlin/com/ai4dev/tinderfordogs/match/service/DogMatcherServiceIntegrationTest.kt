@@ -55,7 +55,13 @@ class DogMatcherServiceIntegrationTest {
         // Given — subject dog saved with name label "dog-42"; id is a generated UUID
         val subjectDog =
             dogProfileRepository.save(
-                DogProfile(name = "dog-42", breed = "Labrador", size = DogSize.MEDIUM, age = 3, gender = DogGender.MALE),
+                DogProfile(
+                    name = "dog-42",
+                    breed = "Labrador",
+                    size = DogSize.MEDIUM,
+                    age = 3,
+                    gender = DogGender.MALE,
+                ),
             )
 
         // Four candidates with intentionally distinct compatibility scores against the subject:

@@ -23,11 +23,20 @@ class PromptSanitizer {
         private const val MAX_INPUT_LENGTH = 10_000
         private val INJECTION_PATTERNS =
             listOf(
-                Regex("""ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)""", RegexOption.IGNORE_CASE),
+                Regex(
+                    """ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)""",
+                    RegexOption.IGNORE_CASE,
+                ),
                 Regex("""you\s+are\s+now\s+(DAN|GPT|jailbreak|unrestricted)""", RegexOption.IGNORE_CASE),
                 Regex("""\[SYSTEM(\s+OVERRIDE)?]""", RegexOption.IGNORE_CASE),
-                Regex("""pretend\s+(you\s+are|this\s+is)\s+.{0,50}(no\s+restrictions?|without\s+limits?)""", RegexOption.IGNORE_CASE),
-                Regex("""act\s+as\s+if\s+you\s+(have\s+no|don't\s+have)\s+(restrictions?|limits?|guidelines?)""", RegexOption.IGNORE_CASE),
+                Regex(
+                    """pretend\s+(you\s+are|this\s+is)\s+.{0,50}(no\s+restrictions?|without\s+limits?)""",
+                    RegexOption.IGNORE_CASE,
+                ),
+                Regex(
+                    """act\s+as\s+if\s+you\s+(have\s+no|don't\s+have)\s+(restrictions?|limits?|guidelines?)""",
+                    RegexOption.IGNORE_CASE,
+                ),
             )
     }
 

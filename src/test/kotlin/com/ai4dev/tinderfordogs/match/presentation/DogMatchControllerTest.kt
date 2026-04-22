@@ -35,28 +35,29 @@ class DogMatchControllerTest {
 
     @Test
     fun `findMatches returns matches from service`() {
-        val matches = listOf(
-            DogMatchEntry(
-                id = matchId1,
-                name = "Buddy",
-                breed = "Labrador",
-                size = DogSize.MEDIUM,
-                age = 3,
-                gender = DogGender.MALE,
-                bio = "Friendly dog",
-                compatibilityScore = 0.95,
-            ),
-            DogMatchEntry(
-                id = matchId2,
-                name = "Max",
-                breed = "Golden Retriever",
-                size = DogSize.LARGE,
-                age = 2,
-                gender = DogGender.MALE,
-                bio = null,
-                compatibilityScore = 0.85,
-            ),
-        )
+        val matches =
+            listOf(
+                DogMatchEntry(
+                    id = matchId1,
+                    name = "Buddy",
+                    breed = "Labrador",
+                    size = DogSize.MEDIUM,
+                    age = 3,
+                    gender = DogGender.MALE,
+                    bio = "Friendly dog",
+                    compatibilityScore = 0.95,
+                ),
+                DogMatchEntry(
+                    id = matchId2,
+                    name = "Max",
+                    breed = "Golden Retriever",
+                    size = DogSize.LARGE,
+                    age = 2,
+                    gender = DogGender.MALE,
+                    bio = null,
+                    compatibilityScore = 0.85,
+                ),
+            )
         val expectedResponse = DogMatchListResponse(matches)
 
         every { service.findMatches(dogId, 2) } returns expectedResponse
@@ -69,18 +70,19 @@ class DogMatchControllerTest {
 
     @Test
     fun `findMatches uses default limit of 1 when not specified`() {
-        val matches = listOf(
-            DogMatchEntry(
-                id = matchId1,
-                name = "Buddy",
-                breed = "Labrador",
-                size = DogSize.MEDIUM,
-                age = 3,
-                gender = DogGender.MALE,
-                bio = null,
-                compatibilityScore = 0.95,
-            ),
-        )
+        val matches =
+            listOf(
+                DogMatchEntry(
+                    id = matchId1,
+                    name = "Buddy",
+                    breed = "Labrador",
+                    size = DogSize.MEDIUM,
+                    age = 3,
+                    gender = DogGender.MALE,
+                    bio = null,
+                    compatibilityScore = 0.95,
+                ),
+            )
         val expectedResponse = DogMatchListResponse(matches)
 
         every { service.findMatches(dogId, 1) } returns expectedResponse

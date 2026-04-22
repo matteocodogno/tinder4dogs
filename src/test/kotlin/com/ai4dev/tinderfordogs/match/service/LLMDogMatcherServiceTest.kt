@@ -77,7 +77,8 @@ class LLMDogMatcherServiceTest {
 
         `when`(promptRegistry.getBlocking(eqString("dog-matcher"))).thenReturn(template)
 
-        val jsonResponse = """{"score": 85, "reasoning": "Both dogs love playing fetch and have similar energy levels."}"""
+        val jsonResponse =
+            """{"score": 85, "reasoning": "Both dogs love playing fetch and have similar energy levels."}"""
         val chatResponse =
             ChatResponse(
                 choices = listOf(Choice(message = Message(role = "assistant", content = jsonResponse))),

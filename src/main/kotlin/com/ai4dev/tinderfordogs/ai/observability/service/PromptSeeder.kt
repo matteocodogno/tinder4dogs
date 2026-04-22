@@ -40,7 +40,14 @@ class PromptSeeder(
                     val t = registry.getYamlFallback(id) ?: error("No YAML fallback for $id")
 
                     // Check if prompt already exists in Langfuse
-                    val existingPrompt = runCatching { langfuse.getPrompt(t.id, label = "latest", cacheTtl = 0) }.getOrNull()
+                    val existingPrompt =
+                        runCatching {
+                            langfuse.getPrompt(
+                                t.id,
+                                label = "latest",
+                                cacheTtl = 0,
+                            )
+                        }.getOrNull()
 
                     if (existingPrompt != null) {
                         logger.info("Skipping ${t.id}: already exists in Langfuse")

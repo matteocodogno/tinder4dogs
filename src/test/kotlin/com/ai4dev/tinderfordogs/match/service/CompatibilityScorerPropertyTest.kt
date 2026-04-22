@@ -50,7 +50,9 @@ class CompatibilityScorerPropertyTest :
         // BUG: a dog scores itself 0.55 (age 30 + breed 25, but NO gender bonus for same gender),
         // while an opposite-gender dog of the same breed and close age scores 0.70.
         "Reflexivity: score(A, A) >= score(A, B) for any B" - {
-            "fails because opposite-gender pairs outscore self-comparison (documents known bug)".config(enabled = false) {
+            "fails because opposite-gender pairs outscore self-comparison (documents known bug)".config(
+                enabled = false,
+            ) {
                 checkAll(arbProfile, arbProfile) { a: DogProfile, b: DogProfile ->
                     CompatibilityScorer.score(a, a) shouldBeGreaterThanOrEqualTo CompatibilityScorer.score(a, b)
                 }
