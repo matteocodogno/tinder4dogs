@@ -1,7 +1,7 @@
 name: CI Pipeline
 
 # Mirrors: just pipeline
-# Stages: lint → test → build → (pr-summary | security-scan | gitleaks | changelog) → ai-costs
+# Stages: lint → build-and-test → (pr-summary | security-scan | gitleaks | changelog) → ai-costs
 #
 # Required secrets: ANTHROPIC_API_KEY
 # Optional secrets: LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, GITLEAKS_LICENSE
@@ -17,9 +17,9 @@ permissions:
 
 jobs:
 
-  # ── 1/8 Lint ────────────────────────────────────────────────────────────────
+  # ── 1/7 Lint ─────────────────────────────────────────────────────────────────
   lint:
-    name: "1/8 Lint"
+    name: "1/7 Lint"
     runs-on: ubuntu-latest
     outputs:
       start_time: ${{ steps.start.outputs.time }}
@@ -47,9 +47,9 @@ jobs:
           echo "$CHANGED_KT" | sed 's/^/  /'
           ./mvnw -q ktlint:check
 
-  # ── 2/8 Test ─────────────────────────────────────────────────────────────────
-  test:
-    name: "2/8 Test"
+  # ── 2/7 Build and Test ─────────────────────────────────────────────────────────
+  build-and-test:
+    name: "2/7 Build and Test"
     needs: lint
     runs-on: ubuntu-latest
     steps:
@@ -59,26 +59,12 @@ jobs:
           java-version: '24'
           distribution: temurin
           cache: maven
-      - run: ./mvnw test
+      - run: ./mvnw clean install
 
-  # ── 3/8 Build ────────────────────────────────────────────────────────────────
-  build:
-    name: "3/8 Build"
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          java-version: '24'
-          distribution: temurin
-          cache: maven
-      - run: ./mvnw clean install -DskipTests
-
-  # ── 4/8 PR Summary ───────────────────────────────────────────────────────────
+  # ── 3/7 PR Summary ───────────────────────────────────────────────────────────
   pr-summary:
-    name: "4/8 PR Summary"
-    needs: build
+    name: "3/7 PR Summary"
+    needs: build-and-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -144,10 +130,10 @@ jobs:
               });
             }
 
-  # ── 5/8 Security Scan ────────────────────────────────────────────────────────
+  # ── 4/7 Security Scan ────────────────────────────────────────────────────────
   security-scan:
-    name: "5/8 Security Scan"
-    needs: build
+    name: "4/7 Security Scan"
+    needs: build-and-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -214,10 +200,10 @@ jobs:
           echo "### $CRITICAL_COUNT CRITICAL findings" >> "$GITHUB_STEP_SUMMARY"
           echo "$TRIAGE" >> "$GITHUB_STEP_SUMMARY"
 
-  # ── 6/8 Secret Detection ─────────────────────────────────────────────────────
+  # ── 5/7 Secret Detection ─────────────────────────────────────────────────────
   gitleaks:
-    name: "6/8 Secret Detection"
-    needs: build
+    name: "5/7 Secret Detection"
+    needs: build-and-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -228,10 +214,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
-  # ── 7/8 Changelog ────────────────────────────────────────────────────────────
+  # ── 6/7 Changelog ────────────────────────────────────────────────────────────
   changelog:
-    name: "7/8 Changelog"
-    needs: build
+    name: "6/7 Changelog"
+    needs: build-and-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -266,10 +252,10 @@ jobs:
           echo "## 📋 Changelog" >> "$GITHUB_STEP_SUMMARY"
           echo "$CHANGELOG" >> "$GITHUB_STEP_SUMMARY"
 
-  # ── 8/8 AI Costs ─────────────────────────────────────────────────────────────
+  # ── 7/7 AI Costs ─────────────────────────────────────────────────────────────
   ai-costs:
-    name: "8/8 AI Costs"
-    needs: [lint, test, build, pr-summary, security-scan, gitleaks, changelog]
+    name: "7/7 AI Costs"
+    needs: [lint, build-and-test, pr-summary, security-scan, gitleaks, changelog]
     runs-on: ubuntu-latest
     if: always()
     steps:
