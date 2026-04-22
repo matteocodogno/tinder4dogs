@@ -902,10 +902,9 @@ ci-fix run_id="":
         exit 1
     fi
 
-    echo -e "{{ BLUE }}📥 Fetching failed logs for run $RUN_ID...{{ NC }}"
+    echo -e "{{ BLUE }}📥 Fetching full failed logs for run $RUN_ID...{{ NC }}"
 
-    # Cap at 12 000 chars to keep the prompt manageable
-    LOGS=$(gh run view "$RUN_ID" --log-failed 2>&1 | head -c 12000)
+    LOGS=$(gh run view "$RUN_ID" --log-failed 2>&1 || true)
 
     if [ -z "$LOGS" ]; then
         echo -e "{{ YELLOW }}⚠️  No failed-step logs found (run may still be in progress){{ NC }}"
@@ -930,41 +929,6 @@ ci-fix run_id="":
 
     echo ""
     echo -e "{{ GREEN }}✅ Analysis saved to: $OUT{{ NC }}"
-    echo ""
-
-    # Offer to commit + push after the user has applied the fix
-    echo -e "{{ YELLOW }}Apply the fix above, then press ENTER to stage all changes and commit+push (Ctrl-C to skip){{ NC }}"
-    read -r _
-
-    if [ -z "$(git status --porcelain)" ]; then
-        echo -e "{{ YELLOW }}⚠️  No changes to commit{{ NC }}"
-        exit 0
-    fi
-
-    echo -e "{{ BLUE }}💬 Generating commit message...{{ NC }}"
-    MSG=$(just commit-msg) || MSG=""
-
-    if [ -z "$MSG" ]; then
-        echo -e "{{ RED }}❌ Could not generate commit message{{ NC }}"
-        exit 1
-    fi
-
-    echo ""
-    echo -e "{{ BLUE }}📝 Commit message:{{ NC }}"
-    echo "$MSG"
-    echo ""
-    echo -e "{{ YELLOW }}Proceed with commit + push? (y/N){{ NC }}"
-    read -r confirm
-
-    if [ "$confirm" = "y" ]; then
-        git add -A
-        git commit -m "$MSG"
-        git push
-        echo -e "{{ GREEN }}✅ Pushed. Watching new run...{{ NC }}"
-        just ci-watch
-    else
-        echo -e "{{ YELLOW }}Skipped. Run 'just ci-watch' after your push.{{ NC }}"
-    fi
 
 # Stage all changes, AI commit, push, watch all CI stages, save logs to .github/actions/logs/
 push-watch:

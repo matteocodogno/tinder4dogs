@@ -58,7 +58,7 @@ class DogMatchServiceTest {
 
         val result = service.findMatches(sourceId, 2)
 
-        assertEquals(3, result.matches.size)
+        assertEquals(2, result.matches.size)
         assertEquals(candidateId2, result.matches[0].id)
         assertEquals(candidateId1, result.matches[1].id)
     }
