@@ -12,6 +12,7 @@ LITELLM_KEY := env_var('LITELLM_MASTER_KEY')
 # Project configuration
 PROJECT_NAME := "tinder-for-dogs"
 LANGFUSE_PROJECT := env_var_or_default('LANGFUSE_PROJECT', 'whysoserious')
+LANGFUSE_URL := env_var_or_default('LANGFUSE_URL', 'http://localhost:3000')
 
 # Colors for output
 RED := '\033[0;31m'
@@ -101,6 +102,33 @@ ai-costs:
 # Reset all AI infrastructure (delete data)
 ai-reset:
     @ai reset
+
+# Report AI costs between two timestamps (ISO 8601, e.g. just cost-report 2025-04-22T10:00:00.000Z 2025-04-22T10:10:00.000Z)
+cost-report from to:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    FROM_TIME="{{from}}"
+    TO_TIME="{{to}}"
+
+    echo -e "{{ BLUE }}💰 AI costs ($FROM_TIME → $TO_TIME){{ NC }}"
+    echo ""
+
+    RESPONSE=$(curl -s "{{LANGFUSE_URL}}/api/public/metrics" \
+        -u "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}" \
+        -G \
+        --data-urlencode "query={\"view\":\"observations\",\"metrics\":[{\"measure\":\"totalCost\",\"aggregation\":\"sum\"}],\"fromTimestamp\":\"${FROM_TIME}\",\"toTimestamp\":\"${TO_TIME}\"}")
+
+    if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+        echo -e "{{ RED }}❌ Langfuse API error:{{ NC }}"
+        echo "$RESPONSE" | jq '.error'
+        exit 1
+    fi
+
+    COST=$(echo "$RESPONSE" | jq -r '.data[0].sum_totalCost // 0')
+    echo -e "  Total cost: {{ GREEN }}\$${COST}{{ NC }}"
+    echo ""
+    echo "$RESPONSE" | jq .
 
 # ============================================
 # Environment & Tool Management (mise)
@@ -421,6 +449,173 @@ commit:
     fi
 
 # ============================================
+# ROLE: PR SUMMARY
+# ============================================
+
+# Generate AI-powered PR summary from current branch diffs
+pr-summary base="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    BASE="{{base}}"
+    BRANCH=$(git branch --show-current)
+
+    if [ "$BRANCH" = "$BASE" ]; then
+        echo -e "{{ RED }}❌ Already on $BASE — switch to your feature branch first{{ NC }}"
+        exit 1
+    fi
+
+    MERGE_BASE=$(git merge-base "$BASE" HEAD)
+
+    DIFF=$(git diff "$MERGE_BASE" HEAD)
+    COMMITS=$(git log "$MERGE_BASE"..HEAD --pretty=format:"%s%n%b" --no-merges)
+
+    if [ -z "$DIFF" ] && [ -z "$COMMITS" ]; then
+        echo -e "{{ YELLOW }}⚠️  No changes found between $BRANCH and $BASE{{ NC }}"
+        exit 0
+    fi
+
+    echo -e "{{ BLUE }}📝 Generating PR summary for $BRANCH → $BASE...{{ NC }}"
+
+    TEMPLATE=$(cat prompts/templates/pr_summary.md)
+
+    PROMPT="${TEMPLATE//\[\[BRANCH\]\]/$BRANCH}"
+    PROMPT="${PROMPT//\[\[BASE\]\]/$BASE}"
+    PROMPT="${PROMPT//\[\[COMMITS\]\]/$COMMITS}"
+    PROMPT="${PROMPT//\[\[DIFF\]\]/$DIFF}"
+
+    PROMPT_FILE=$(mktemp)
+    trap 'rm -f "$PROMPT_FILE"' EXIT
+    echo "$PROMPT" > "$PROMPT_FILE"
+
+    just _call_ai ci-summarizer "$PROMPT_FILE" task=pr_summary branch="$BRANCH" base="$BASE"
+
+# Scan current branch diffs with Trivy and triage CRITICAL findings with AI
+security-triage base="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    BASE="{{base}}"
+    BRANCH=$(git branch --show-current)
+
+    if [ "$BRANCH" = "$BASE" ]; then
+        echo -e "{{ RED }}❌ Already on $BASE — switch to your feature branch first{{ NC }}"
+        exit 1
+    fi
+
+    if ! command -v trivy > /dev/null 2>&1; then
+        echo -e "{{ RED }}❌ trivy not found in PATH{{ NC }}"
+        exit 1
+    fi
+
+    MERGE_BASE=$(git merge-base "$BASE" HEAD)
+    CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "$MERGE_BASE" HEAD)
+
+    if [ -z "$CHANGED_FILES" ]; then
+        echo -e "{{ YELLOW }}⚠️  No changed files found between $BRANCH and $BASE{{ NC }}"
+        exit 0
+    fi
+
+    TMP_DIR=$(mktemp -d)
+    trap 'rm -rf "$TMP_DIR"' EXIT
+    TRIVY_JSON="$TMP_DIR/trivy.json"
+    FILTERED_JSON="$TMP_DIR/trivy_filtered.json"
+    PROMPT_FILE="$TMP_DIR/security_prompt.md"
+    CHANGED_FILES_JSON="$TMP_DIR/changed_files.json"
+
+    echo -e "{{ BLUE }}🔒 Running Trivy scan on changed files for $BRANCH → $BASE...{{ NC }}"
+    trivy fs --quiet --format json --severity CRITICAL . > "$TRIVY_JSON"
+
+    printf "%s\n" "$CHANGED_FILES" | jq -R -s 'split("\n") | map(select(length > 0))' > "$CHANGED_FILES_JSON"
+
+    jq --argjson changed "$(cat "$CHANGED_FILES_JSON")" '
+      {
+        Results: [
+          .Results[]? as $r
+          | select(
+              any($changed[]; ($r.Target == .)
+                or ($r.Target == ("./" + .))
+                or ($r.Target | startswith(. + " ("))
+                or ($r.Target | startswith("./" + . + " ("))
+              )
+            )
+        ]
+      }
+    ' "$TRIVY_JSON" > "$FILTERED_JSON"
+
+    CRITICAL_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' "$FILTERED_JSON")
+    if [ "$CRITICAL_COUNT" -eq 0 ]; then
+        echo -e "{{ GREEN }}✅ No CRITICAL vulnerabilities found in changed files{{ NC }}"
+        exit 0
+    fi
+
+    CRITICAL_FINDINGS=$(jq '[
+      .Results[]?
+      | {
+          target: .Target,
+          vulnerabilities: [
+            .Vulnerabilities[]?
+            | select(.Severity=="CRITICAL")
+            | {
+                id: .VulnerabilityID,
+                package: .PkgName,
+                installed_version: .InstalledVersion,
+                fixed_version: .FixedVersion,
+                title: .Title,
+                primary_url: .PrimaryURL,
+                description: ((.Description // "")[0:400])
+              }
+          ]
+        }
+      | select((.vulnerabilities | length) > 0)
+    ]' "$FILTERED_JSON")
+
+    COMMITS=$(git log "$MERGE_BASE"..HEAD --pretty=format:"- %s" --no-merges)
+
+    printf "%s\n%s\n%s\n\n%s\n%s\n\n%s\n%s\n\n%s\n%s\n" \
+      "You are a security analyst. Triage the CRITICAL Trivy findings for this branch diff." \
+      "Focus only on real risk for this codebase and avoid generic advice." \
+      "Output markdown sections: Summary, Critical Findings, Triage Decision, Immediate Actions." \
+      "Branch:" \
+      "$BRANCH (base: $BASE)" \
+      "Commits in scope:" \
+      "$COMMITS" \
+      "CRITICAL findings (JSON):" \
+      "$CRITICAL_FINDINGS" > "$PROMPT_FILE"
+
+    echo -e "{{ BLUE }}🧠 Running AI triage for $CRITICAL_COUNT CRITICAL findings...{{ NC }}"
+    just _call_ai ci-security-analyst "$PROMPT_FILE" task=security_triage branch="$BRANCH" base="$BASE" critical_count="$CRITICAL_COUNT"
+
+# Run local gitleaks scan for commits in current branch diff
+gitleaks-branch base="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    BASE="{{base}}"
+    BRANCH=$(git branch --show-current)
+
+    if [ "$BRANCH" = "$BASE" ]; then
+        echo -e "{{ RED }}❌ Already on $BASE — switch to your feature branch first{{ NC }}"
+        exit 1
+    fi
+
+    if ! command -v gitleaks > /dev/null 2>&1; then
+        echo -e "{{ RED }}❌ gitleaks not found in PATH{{ NC }}"
+        exit 1
+    fi
+
+    MERGE_BASE=$(git merge-base "$BASE" HEAD)
+    COMMITS_COUNT=$(git rev-list --count "$MERGE_BASE"..HEAD)
+
+    if [ "$COMMITS_COUNT" -eq 0 ]; then
+        echo -e "{{ YELLOW }}⚠️  No commits found between $BRANCH and $BASE{{ NC }}"
+        exit 0
+    fi
+
+    echo -e "{{ BLUE }}🔐 Running gitleaks for $BRANCH → $BASE (range: $MERGE_BASE..HEAD)...{{ NC }}"
+    gitleaks git . --log-opts="$MERGE_BASE..HEAD"
+
+# ============================================
 # ROLE: REVIEWER (Code Review)
 # ============================================
 
@@ -668,3 +863,150 @@ changelog-save from_tag="" to_tag="":
     mv "$TEMP_FILE" CHANGELOG.md
 
     echo -e "{{ GREEN }}✅ Changelog saved to CHANGELOG.md{{ NC }}"
+
+# ============================================
+# ROLE: LINTER (PR Lint)
+# ============================================
+
+# Lint Kotlin files changed on the current branch vs base
+lint-pr base="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    BASE="{{base}}"
+    CURRENT=$(git branch --show-current)
+
+    if [ "$CURRENT" = "$BASE" ]; then
+        echo -e "{{ RED }}❌ Already on $BASE — switch to your feature branch first{{ NC }}"
+        exit 1
+    fi
+
+    # Find the merge base to compare only branch changes
+    MERGE_BASE=$(git merge-base "$BASE" HEAD)
+
+    # Get changed Kotlin files (added, modified, renamed)
+    CHANGED_KT=$(git diff --name-only --diff-filter=AMR "$MERGE_BASE" HEAD -- '*.kt')
+
+    if [ -z "$CHANGED_KT" ]; then
+        echo -e "{{ GREEN }}✅ No Kotlin files changed on this branch{{ NC }}"
+        exit 0
+    fi
+
+    echo -e "{{ BLUE }}🔍 Linting changed Kotlin files ($CURRENT vs $BASE):{{ NC }}"
+    echo "$CHANGED_KT" | sed 's/^/  /'
+    echo ""
+
+    # Run ktlint check, capture output and exit code
+    LINT_OUTPUT=$(./mvnw -q ktlint:check 2>&1) && LINT_RC=0 || LINT_RC=$?
+
+    if [ $LINT_RC -eq 0 ]; then
+        echo -e "{{ GREEN }}✅ All changed Kotlin files pass lint{{ NC }}"
+        exit 0
+    fi
+
+    # Filter lint output to only show violations in changed files
+    FOUND=0
+    while IFS= read -r file; do
+        FILE_HITS=$(echo "$LINT_OUTPUT" | grep -F "$file" || true)
+        if [ -n "$FILE_HITS" ]; then
+            if [ $FOUND -eq 0 ]; then
+                echo -e "{{ RED }}Lint violations in changed files:{{ NC }}"
+                echo ""
+            fi
+            FOUND=1
+            echo "$FILE_HITS"
+        fi
+    done <<< "$CHANGED_KT"
+
+    if [ $FOUND -eq 0 ]; then
+        echo -e "{{ GREEN }}✅ All changed Kotlin files pass lint{{ NC }}"
+        echo -e "{{ YELLOW }}⚠️  Other files have lint issues (run ./mvnw ktlint:check to see all){{ NC }}"
+        exit 0
+    fi
+
+    echo ""
+    echo -e "{{ YELLOW }}💡 Auto-fix with: ./mvnw ktlint:format{{ NC }}"
+    exit 1
+
+# Generate changelog from commit messages between refs
+changelog FROM="" TO="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if [ -n "{{FROM}}" ] && [ -n "{{TO}}" ]; then
+      COMMITS=$(git log --pretty=format:'- %s' "{{FROM}}..{{TO}}")
+    elif [ -n "{{FROM}}" ]; then
+      COMMITS=$(git log --pretty=format:'- %s' "{{FROM}}..HEAD")
+    elif [ -n "{{TO}}" ]; then
+      COMMITS=$(git log --pretty=format:'- %s' "{{TO}}")
+    else
+      COMMITS=$(git log --pretty=format:'- %s')
+    fi
+
+    if [ -z "$COMMITS" ]; then
+      echo "❌ No commits found for the selected range"
+      exit 1
+    fi
+
+    PROMPT_FILE=$(mktemp)
+    trap 'rm -f "$PROMPT_FILE"' EXIT
+
+    printf "%s\n%s\n%s\n\n%s\n%s\n" \
+      "Create a concise changelog from these commit messages." \
+      "Return markdown grouped by logical areas with short bullets." \
+      "Do not invent changes not present in the commits." \
+      "Commits:" \
+      "$COMMITS" > "$PROMPT_FILE"
+
+    if [ -n "{{FROM}}" ] && [ -n "{{TO}}" ]; then
+      just _call_ai ci-summarizer "$PROMPT_FILE" task=changelog from="{{FROM}}" to="{{TO}}"
+    elif [ -n "{{FROM}}" ]; then
+      just _call_ai ci-summarizer "$PROMPT_FILE" task=changelog from="{{FROM}}" to="HEAD"
+    elif [ -n "{{TO}}" ]; then
+      just _call_ai ci-summarizer "$PROMPT_FILE" task=changelog to="{{TO}}"
+    else
+      just _call_ai ci-summarizer "$PROMPT_FILE" task=changelog
+    fi
+
+# ============================================
+# CI PIPELINE
+# ============================================
+
+# Run all CI stages: lint → test → build → pr-summary → security → gitleaks → changelog → ai-costs
+pipeline base="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    BASE="{{base}}"
+    BRANCH=$(git branch --show-current)
+    START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+    CURRENT_STAGE=""
+
+    trap 'echo -e "\n{{ RED }}❌ Pipeline failed at stage: $CURRENT_STAGE{{ NC }}"' ERR
+
+    stage() {
+        local label="$1"; shift
+        CURRENT_STAGE="$label"
+        echo -e "\n{{ BLUE }}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{{ NC }}"
+        echo -e "{{ BLUE }}▶ $label{{ NC }}"
+        echo -e "{{ BLUE }}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{{ NC }}\n"
+        "$@"
+        echo -e "\n{{ GREEN }}✅ $label passed{{ NC }}"
+    }
+
+    echo -e "{{ BLUE }}🚀 Pipeline | $BRANCH → $BASE | started at $START_TIME{{ NC }}"
+
+    stage "1/7  Lint"              just lint-pr        "$BASE"
+    stage "2/7  Build and Test"    just build
+    stage "3/7  PR Summary"        just pr-summary     "$BASE"
+    stage "4/7  Security Scan"     just security-triage "$BASE"
+    stage "5/7  Secret Detection"  just gitleaks-branch "$BASE"
+    stage "6/7  Changelog"         just changelog
+
+    END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+    stage "7/7  AI Costs"          just cost-report "$START_TIME" "$END_TIME"
+
+    echo -e "\n{{ BLUE }}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{{ NC }}"
+    echo -e "{{ GREEN }}✅ Pipeline complete — all 8 stages passed{{ NC }}"
+    echo -e "{{ BLUE }}   from : $START_TIME{{ NC }}"
+    echo -e "{{ BLUE }}   to   : $END_TIME{{ NC }}"
