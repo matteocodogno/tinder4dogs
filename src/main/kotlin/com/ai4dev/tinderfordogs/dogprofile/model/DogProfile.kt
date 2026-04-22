@@ -1,12 +1,15 @@
 package com.ai4dev.tinderfordogs.dogprofile.model
 
+import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
+import jakarta.persistence.ElementCollection
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
 import jakarta.persistence.Enumerated
 import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
+import jakarta.persistence.JoinColumn
 import jakarta.persistence.PrePersist
 import jakarta.persistence.Table
 import java.time.Instant
@@ -32,6 +35,10 @@ class DogProfile(
     val gender: DogGender,
     @Column(length = 500)
     val bio: String? = null,
+    @ElementCollection
+    @CollectionTable(name = "dog_interests", joinColumns = [JoinColumn(name = "dog_profile_id")])
+    @Column(name = "interest", length = 100)
+    val interests: List<String> = emptyList(),
     @Column(nullable = false, updatable = false)
     var createdAt: Instant = Instant.EPOCH,
     @Column(nullable = false)
