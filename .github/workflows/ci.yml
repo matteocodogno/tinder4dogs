@@ -10,9 +10,9 @@ permissions:
   security-events: write
 
 jobs:
-  # ── 1 / 6  Lint + Test + Build ──────────────────────────────────────────────
-  lint-test-build:
-    name: "[1/6] Lint + Test + Build"
+  # ── 1a / 6  Lint ────────────────────────────────────────────────────────────
+  lint:
+    name: "[1a/6] Lint"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -45,8 +45,38 @@ jobs:
           echo "❌ Lint failed — auto-format committed. Re-run checks after the new commit triggers CI."
           exit 1
 
+  # ── 1b / 6  Test ────────────────────────────────────────────────────────────
+  test:
+    name: "[1b/6] Test"
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Java 24
+        uses: actions/setup-java@v4
+        with:
+          java-version: "24"
+          distribution: temurin
+          cache: maven
+
       - name: Test
         run: ./mvnw test
+
+  # ── 1c / 6  Build ───────────────────────────────────────────────────────────
+  build:
+    name: "[1c/6] Build"
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Java 24
+        uses: actions/setup-java@v4
+        with:
+          java-version: "24"
+          distribution: temurin
+          cache: maven
 
       - name: Build
         run: ./mvnw package -DskipTests
@@ -62,7 +92,7 @@ jobs:
   pr-summary:
     name: "[2/6] AI PR Summary"
     runs-on: ubuntu-latest
-    needs: lint-test-build
+    needs: build
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v6
@@ -113,7 +143,7 @@ jobs:
   trivy-ai-triage:
     name: "[3/6] Trivy Scan → AI Triage"
     runs-on: ubuntu-latest
-    needs: lint-test-build
+    needs: build
     steps:
       - uses: actions/checkout@v6
 
@@ -168,7 +198,7 @@ jobs:
   gitleaks-scan:
     name: "[4/6] Gitleaks Scan"
     runs-on: ubuntu-latest
-    needs: lint-test-build
+    needs: build
     steps:
       - uses: actions/checkout@v6
         with:
@@ -183,7 +213,7 @@ jobs:
   change-log:
     name: "[5/6] Change Log"
     runs-on: ubuntu-latest
-    needs: lint-test-build
+    needs: build
     steps:
       - uses: actions/checkout@v6
         with:
