@@ -1026,7 +1026,7 @@ push-watch:
         echo ""
     } > "$LOG_FILE"
 
-    # ── Stream logs in real time; watch in background for exit status ────────
+    # ── Stream logs in real time → terminal + file simultaneously ────────────
     echo -e "{{ BLUE }}👀 Streaming CI logs in real time (Ctrl-C to detach)...{{ NC }}"
     echo ""
 
@@ -1038,7 +1038,7 @@ push-watch:
         LOGS=$(gh run view "$RUN_ID" --log 2>/dev/null || true)
         CURR=$(printf '%s\n' "$LOGS" | wc -l)
         if [ "$CURR" -gt "$PREV" ]; then
-            printf '%s\n' "$LOGS" | sed -n "$((PREV+1)),${CURR}p"
+            printf '%s\n' "$LOGS" | sed -n "$((PREV+1)),${CURR}p" | tee -a "$LOG_FILE"
             PREV=$CURR
         fi
         sleep 5
@@ -1046,12 +1046,14 @@ push-watch:
     wait "$WATCH_PID"
     WATCH_EXIT=$?
 
+    # Flush remaining lines
     LOGS=$(gh run view "$RUN_ID" --log 2>/dev/null || true)
     CURR=$(printf '%s\n' "$LOGS" | wc -l)
-    [ "$CURR" -gt "$PREV" ] && printf '%s\n' "$LOGS" | sed -n "$((PREV+1)),${CURR}p"
+    [ "$CURR" -gt "$PREV" ] && printf '%s\n' "$LOGS" | sed -n "$((PREV+1)),${CURR}p" | tee -a "$LOG_FILE"
 
     # ── Save post-run job summary ─────────────────────────────────────────────
     {
+        echo ""
         echo "========================================"
         echo "JOB SUMMARY"
         echo "========================================"
@@ -1060,20 +1062,7 @@ push-watch:
         echo ""
     } >> "$LOG_FILE"
 
-    # ── Save full step-by-step logs ───────────────────────────────────────────
-    echo -e "{{ BLUE }}📥 Saving full step logs to $LOG_FILE...{{ NC }}"
-    {
-        echo "========================================"
-        echo "STEP LOGS"
-        echo "========================================"
-        echo ""
-        if [ $WATCH_EXIT -ne 0 ]; then
-            gh run view "$RUN_ID" --log-failed 2>&1 || true
-        else
-            gh run view "$RUN_ID" --log 2>&1 || true
-        fi
-    } >> "$LOG_FILE"
-
+    # ── (step logs already written incrementally above) ───────────────────────
     echo -e "{{ GREEN }}✅ Logs saved: $LOG_FILE{{ NC }}"
     echo ""
 
