@@ -33,9 +33,8 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh | sh -s -- -b /usr/local/bin
       - name: Install trivy
         run: |
-          wget -qO /tmp/trivy.tar.gz https://github.com/aquasecurity/trivy/releases/download/v0.48.0/trivy_0.48.0_Linux-64bit.tar.gz
-          tar xzf /tmp/trivy.tar.gz -C /usr/local/bin
-          chmod +x /usr/local/bin/trivy
+          sudo apt-get update
+          sudo apt-get install -y trivy
       - name: Run CI pipeline
         run: just ci
         env:
