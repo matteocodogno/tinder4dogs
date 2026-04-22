@@ -52,6 +52,12 @@ jobs:
     name: "2/7 Build and Test"
     needs: lint
     runs-on: ubuntu-latest
+    env:
+      LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY || 'ci-placeholder' }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || 'ci-placeholder' }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || 'ci-placeholder' }}
+      LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY || 'ci-placeholder' }}
+      LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY || 'ci-placeholder' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
