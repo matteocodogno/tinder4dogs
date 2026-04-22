@@ -34,5 +34,3 @@ langfuse:
   prompt:
     cache_ttl_seconds: 0
     label: test
-
-
