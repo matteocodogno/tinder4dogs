@@ -853,12 +853,31 @@ ci-watch:
     echo -e "{{ BLUE }}🔗 Run ID: $RUN_ID — $(gh run view "$RUN_ID" --json url -q '.url'){{ NC }}"
     echo ""
 
-    # Watch until completion (gh exits 1 if the run fails)
-    if gh run watch "$RUN_ID" --exit-status; then
-        echo ""
+    # Watch in background for exit status; stream logs in real time
+    gh run watch "$RUN_ID" --exit-status >/dev/null 2>&1 &
+    WATCH_PID=$!
+
+    PREV=0
+    while kill -0 "$WATCH_PID" 2>/dev/null; do
+        LOGS=$(gh run view "$RUN_ID" --log 2>/dev/null || true)
+        CURR=$(printf '%s\n' "$LOGS" | wc -l)
+        if [ "$CURR" -gt "$PREV" ]; then
+            printf '%s\n' "$LOGS" | sed -n "$((PREV+1)),${CURR}p"
+            PREV=$CURR
+        fi
+        sleep 5
+    done
+    wait "$WATCH_PID"
+    CI_EXIT=$?
+
+    LOGS=$(gh run view "$RUN_ID" --log 2>/dev/null || true)
+    CURR=$(printf '%s\n' "$LOGS" | wc -l)
+    [ "$CURR" -gt "$PREV" ] && printf '%s\n' "$LOGS" | sed -n "$((PREV+1)),${CURR}p"
+
+    echo ""
+    if [ $CI_EXIT -eq 0 ]; then
         echo -e "{{ GREEN }}✅ CI passed{{ NC }}"
     else
-        echo ""
         echo -e "{{ RED }}❌ CI failed — fetching logs and running AI analysis...{{ NC }}"
         echo ""
         just ci-fix "$RUN_ID"
@@ -1007,12 +1026,29 @@ push-watch:
         echo ""
     } > "$LOG_FILE"
 
-    # ── Watch (live in terminal) ──────────────────────────────────────────────
-    echo -e "{{ BLUE }}👀 Watching CI stages (Ctrl-C to detach)...{{ NC }}"
+    # ── Stream logs in real time; watch in background for exit status ────────
+    echo -e "{{ BLUE }}👀 Streaming CI logs in real time (Ctrl-C to detach)...{{ NC }}"
     echo ""
 
-    WATCH_EXIT=0
-    gh run watch "$RUN_ID" --exit-status || WATCH_EXIT=$?
+    gh run watch "$RUN_ID" --exit-status >/dev/null 2>&1 &
+    WATCH_PID=$!
+
+    PREV=0
+    while kill -0 "$WATCH_PID" 2>/dev/null; do
+        LOGS=$(gh run view "$RUN_ID" --log 2>/dev/null || true)
+        CURR=$(printf '%s\n' "$LOGS" | wc -l)
+        if [ "$CURR" -gt "$PREV" ]; then
+            printf '%s\n' "$LOGS" | sed -n "$((PREV+1)),${CURR}p"
+            PREV=$CURR
+        fi
+        sleep 5
+    done
+    wait "$WATCH_PID"
+    WATCH_EXIT=$?
+
+    LOGS=$(gh run view "$RUN_ID" --log 2>/dev/null || true)
+    CURR=$(printf '%s\n' "$LOGS" | wc -l)
+    [ "$CURR" -gt "$PREV" ] && printf '%s\n' "$LOGS" | sed -n "$((PREV+1)),${CURR}p"
 
     # ── Save post-run job summary ─────────────────────────────────────────────
     {
