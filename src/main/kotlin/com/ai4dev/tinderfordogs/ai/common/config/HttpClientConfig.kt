@@ -21,7 +21,7 @@ class HttpClientConfig(
     @Value($$"${openai.api-key}") private val openaiApiKey: String,
 ) {
     companion object {
-        private const val openaiBaseUrl = "https://api.openai.com/v1"
+        private const val OPEN_AI_BASE_URL = "https://api.openai.com/v1"
     }
 
     @Bean
@@ -36,7 +36,7 @@ class HttpClientConfig(
 
             groups.filterByName("openai").forEachClient { _, builder ->
                 builder
-                    .baseUrl(openaiBaseUrl)
+                    .baseUrl(OPEN_AI_BASE_URL)
                     .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer $openaiApiKey")
                     .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
             }
