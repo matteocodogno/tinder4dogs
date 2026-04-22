@@ -6,7 +6,7 @@ on:
 
 permissions:
   pull-requests: write
-  contents: read
+  contents: write
   security-events: write
 
 jobs:
@@ -25,7 +25,25 @@ jobs:
           cache: maven
 
       - name: Lint (ktlint)
+        id: lint
+        continue-on-error: true
         run: ./mvnw ktlint:check -q
+
+      - name: Lint fix (auto-format)
+        if: steps.lint.outcome == 'failure'
+        run: |
+          ./mvnw ktlint:format -q
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -u '*.kt'
+          git commit -m "style(ktlint): auto-format kotlin sources"
+          git push origin HEAD:${{ github.head_ref }}
+
+      - name: Fail if lint errors remain
+        if: steps.lint.outcome == 'failure'
+        run: |
+          echo "❌ Lint failed — auto-format committed. Re-run checks after the new commit triggers CI."
+          exit 1
 
       - name: Test
         run: ./mvnw test
