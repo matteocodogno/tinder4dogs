@@ -830,6 +830,124 @@ cost-report days="1":
     echo -e "{{ GREEN }}Grand total (last {{days}} day(s)): \$${GRAND}{{ NC }}"
 
 # ============================================
+# GitHub Actions — CI Watch & AI Fix
+# ============================================
+
+# Watch the latest CI run on current branch; on failure fetch logs and AI-triage
+ci-watch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    BRANCH=$(git branch --show-current)
+    echo -e "{{ BLUE }}👀 Watching CI for branch: $BRANCH{{ NC }}"
+
+    # Get the latest run ID for this branch
+    RUN_ID=$(gh run list --branch "$BRANCH" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || true)
+
+    if [ -z "$RUN_ID" ]; then
+        echo -e "{{ RED }}❌ No CI runs found for branch '$BRANCH'{{ NC }}"
+        echo "    Push first, then run: just ci-watch"
+        exit 1
+    fi
+
+    echo -e "{{ BLUE }}🔗 Run ID: $RUN_ID — $(gh run view "$RUN_ID" --json url -q '.url'){{ NC }}"
+    echo ""
+
+    # Watch until completion (gh exits 1 if the run fails)
+    if gh run watch "$RUN_ID" --exit-status; then
+        echo ""
+        echo -e "{{ GREEN }}✅ CI passed{{ NC }}"
+    else
+        echo ""
+        echo -e "{{ RED }}❌ CI failed — fetching logs and running AI analysis...{{ NC }}"
+        echo ""
+        just ci-fix "$RUN_ID"
+    fi
+
+# Fetch failed CI logs, AI-analyse, propose fix, optionally commit+push
+ci-fix run_id="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    BRANCH=$(git branch --show-current)
+
+    # Resolve run ID: use argument or latest failure on this branch
+    RUN_ID="{{run_id}}"
+    if [ -z "$RUN_ID" ]; then
+        RUN_ID=$(gh run list --branch "$BRANCH" --status failure --limit 1 --json databaseId \
+                  -q '.[0].databaseId' 2>/dev/null || true)
+    fi
+
+    if [ -z "$RUN_ID" ]; then
+        echo -e "{{ RED }}❌ No failed runs found for branch '$BRANCH'{{ NC }}"
+        exit 1
+    fi
+
+    echo -e "{{ BLUE }}📥 Fetching failed logs for run $RUN_ID...{{ NC }}"
+
+    # Cap at 12 000 chars to keep the prompt manageable
+    LOGS=$(gh run view "$RUN_ID" --log-failed 2>&1 | head -c 12000)
+
+    if [ -z "$LOGS" ]; then
+        echo -e "{{ YELLOW }}⚠️  No failed-step logs found (run may still be in progress){{ NC }}"
+        exit 1
+    fi
+
+    TEMPLATE=$(cat prompts/templates/ci_fix.md)
+    PROMPT="${TEMPLATE//\[\[BRANCH\]\]/$BRANCH}"
+    PROMPT="${PROMPT//\[\[RUN_ID\]\]/$RUN_ID}"
+    PROMPT="${PROMPT//\[\[LOGS\]\]/$LOGS}"
+
+    TEMP_PROMPT=$(mktemp)
+    trap 'rm -f "$TEMP_PROMPT"' EXIT
+    echo "$PROMPT" > "$TEMP_PROMPT"
+
+    mkdir -p reviews
+    OUT="reviews/ci-fix-$(date +%Y%m%d-%H%M%S).md"
+
+    echo -e "{{ BLUE }}🤖 Running AI analysis...{{ NC }}"
+    echo ""
+    just _call_ai reviewer "$TEMP_PROMPT" task=ci_fix run_id="$RUN_ID" | tee "$OUT"
+
+    echo ""
+    echo -e "{{ GREEN }}✅ Analysis saved to: $OUT{{ NC }}"
+    echo ""
+
+    # Offer to commit + push after the user has applied the fix
+    echo -e "{{ YELLOW }}Apply the fix above, then press ENTER to stage all changes and commit+push (Ctrl-C to skip){{ NC }}"
+    read -r _
+
+    if [ -z "$(git status --porcelain)" ]; then
+        echo -e "{{ YELLOW }}⚠️  No changes to commit{{ NC }}"
+        exit 0
+    fi
+
+    echo -e "{{ BLUE }}💬 Generating commit message...{{ NC }}"
+    MSG=$(just commit-msg) || MSG=""
+
+    if [ -z "$MSG" ]; then
+        echo -e "{{ RED }}❌ Could not generate commit message{{ NC }}"
+        exit 1
+    fi
+
+    echo ""
+    echo -e "{{ BLUE }}📝 Commit message:{{ NC }}"
+    echo "$MSG"
+    echo ""
+    echo -e "{{ YELLOW }}Proceed with commit + push? (y/N){{ NC }}"
+    read -r confirm
+
+    if [ "$confirm" = "y" ]; then
+        git add -A
+        git commit -m "$MSG"
+        git push
+        echo -e "{{ GREEN }}✅ Pushed. Watching new run...{{ NC }}"
+        just ci-watch
+    else
+        echo -e "{{ YELLOW }}Skipped. Run 'just ci-watch' after your push.{{ NC }}"
+    fi
+
+# ============================================
 # ROLE: CHANGELOG (Release Notes)
 # ============================================
 
