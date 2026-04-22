@@ -146,7 +146,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Run Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.20.0
         with:
           scan-type: fs
           format: json
