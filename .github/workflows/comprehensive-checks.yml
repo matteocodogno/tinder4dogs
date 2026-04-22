@@ -1,0 +1,186 @@
+name: Comprehensive CI Checks
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    types: [ opened, synchronize, reopened ]
+
+jobs:
+  build-test-lint:
+    name: Build, Test & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Java 24
+        uses: actions/setup-java@v4
+        with:
+          java-version: '24'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: 🔨 Build Project
+        run: ./mvnw clean install -DskipTests
+      - name: 🔍 Run Linting
+        run: ./mvnw ktlint:check -q
+      - name: 🧪 Run Tests/
+        run: ./mvnw test
+
+  security-scan:
+    name: Security Scans (Gitleaks & Trivy AI Triage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Security Tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y curl jq
+          # Install Gitleaks
+          VERSION=$(curl -s https://api.github.com/repos/gitleaks/gitleaks/releases/latest | jq -r .tag_name)
+          curl -L -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/$VERSION/gitleaks_${VERSION:1}_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo mv gitleaks /usr/local/bin/
+          # Install Trivy
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+      - name: Gitleaks Secret Scan
+        run: gitleaks detect --verbose --redact
+      - name: Trivy Vulnerability Scan
+        id: trivy
+        run: |
+          trivy fs -f json -o trivy-results.json .
+      - name: AI Triage of Critical Findings
+        if: always()
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -f trivy-results.json ]; then
+            CRITICAL_FINDINGS=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH")] | .[0:10]' trivy-results.json)
+            if [ "$CRITICAL_FINDINGS" != "[]" ] && [ -n "$ANTHROPIC_API_KEY" ]; then
+              echo "🤖 Running AI triage for security findings..."
+              TRIAGE=$(curl -s https://api.anthropic.com/v1/messages \
+                -H "x-api-key: $ANTHROPIC_API_KEY" \
+                -H "anthropic-version: 2023-06-01" \
+                -H "content-type: application/json" \
+                -d "$(jq -n --arg findings "$CRITICAL_FINDINGS" '{
+                  model: "claude-3-5-haiku-20241022",
+                  max_tokens: 1000,
+                  system: "You are a security expert. Analyze the following Trivy vulnerability findings (JSON) and provide a concise triage report. For each finding, explain the actual risk in the context of a Spring Boot application and suggest immediate mitigation steps.",
+                  messages: [{role: "user", content: ("Findings:\n" + $findings)}]
+                }')" | jq -r '.content[0].text')
+              echo "## 🛡️ AI Security Triage Report" >> $GITHUB_STEP_SUMMARY
+              echo "$TRIAGE" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+  ai-automation:
+    name: AI PR Summary & Changelog
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq curl
+      - name: Generate AI PR Summary
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          git diff origin/${{ github.base_ref }}..HEAD > pr.diff
+          DIFF=$(head -c 12000 pr.diff)
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            SUMMARY=$(curl -s https://api.anthropic.com/v1/messages \
+              -H "x-api-key: $ANTHROPIC_API_KEY" \
+              -H "anthropic-version: 2023-06-01" \
+              -H "content-type: application/json" \
+              -d "$(jq -n --arg diff "$DIFF" --arg title "${{ github.event.pull_request.title }}" '{
+                model: "claude-3-5-haiku-20241022",
+                max_tokens: 800,
+                system: "Analyze the provided git diff and generate a clear, concise Pull Request summary. Include: 1. Summary (2-3 sentences), 2. Key Changes (bulleted), 3. Impact.",
+                messages: [{role: "user", content: ("PR: " + $title + "\n\nDiff:\n" + $diff)}]
+              }')" | jq -r '.content[0].text')
+            echo "## 🤖 AI PR Summary" >> $GITHUB_STEP_SUMMARY
+            echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
+          fi
+      - name: Generate AI Changelog
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          COMMITS=$(git log origin/${{ github.base_ref }}..HEAD --pretty=format:"%s%n%b" --no-merges)
+          if [ -n "$COMMITS" ] && [ -n "$ANTHROPIC_API_KEY" ]; then
+            CHANGELOG=$(curl -s https://api.anthropic.com/v1/messages \
+              -H "x-api-key: $ANTHROPIC_API_KEY" \
+              -H "anthropic-version: 2023-06-01" \
+              -H "content-type: application/json" \
+              -d "$(jq -n --arg commits "$COMMITS" '{
+                model: "claude-3-5-haiku-20241022",
+                max_tokens: 1000,
+                system: "Write a CHANGELOG section from conventional commits. Group by type (feat, fix, etc.). Be concise.",
+                messages: [{role: "user", content: ("Commits:\n" + $commits)}]
+              }')" | jq -r '.content[0].text')
+            
+            echo "## 📝 AI Generated Changelog" >> $GITHUB_STEP_SUMMARY
+            echo "$CHANGELOG" >> $GITHUB_STEP_SUMMARY
+
+            # Update CHANGELOG.md following Justfile logic
+            TEMP_FILE=$(mktemp)
+            if [ -f "CHANGELOG.md" ]; then
+                if grep -q "^# Changelog" CHANGELOG.md; then
+                    NEW_CONTENT_FILE=$(mktemp)
+                    echo "$CHANGELOG" > "$NEW_CONTENT_FILE"
+                    awk -v newfile="$NEW_CONTENT_FILE" '
+                        BEGIN { inserted = 0 }
+                        !inserted && /^## \[/ {
+                            print ""
+                            while ((getline line < newfile) > 0) { print line }
+                            close(newfile)
+                            print ""
+                            inserted = 1
+                        }
+                        { print }
+                    ' CHANGELOG.md > "$TEMP_FILE"
+                    rm -f "$NEW_CONTENT_FILE"
+                else
+                    echo "$CHANGELOG" > "$TEMP_FILE"
+                    echo "" >> "$TEMP_FILE"
+                    cat CHANGELOG.md >> "$TEMP_FILE"
+                fi
+            else
+                echo "# Changelog" > "$TEMP_FILE"
+                echo "" >> "$TEMP_FILE"
+                echo "All notable changes to this project will be documented in this file." >> "$TEMP_FILE"
+                echo "" >> "$TEMP_FILE"
+                echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)," >> "$TEMP_FILE"
+                echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)." >> "$TEMP_FILE"
+                echo "" >> "$TEMP_FILE"
+                echo "$CHANGELOG" >> "$TEMP_FILE"
+            fi
+            mv "$TEMP_FILE" CHANGELOG.md
+          fi
+
+  observability:
+    name: AI Cost & Observability
+    runs-on: ubuntu-latest
+    needs: [build-test-lint, security-scan, ai-automation]
+    if: always()
+    steps:
+      - name: Langfuse Cost Report
+        env:
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+        run: |
+          if [ -n "$LANGFUSE_PUBLIC_KEY" ] && [ -n "$LANGFUSE_SECRET_KEY" ]; then
+            echo "📊 Fetching Langfuse usage report..."
+            RESPONSE=$(curl -s -u "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}" \
+              "https://cloud.langfuse.com/api/public/metrics/daily")
+            
+            if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+                echo "❌ Langfuse API Error: $(echo "$RESPONSE" | jq -r '.error')"
+            else
+                REPORT=$(echo "$RESPONSE" | jq -r '
+                  .data | sort_by(.date) | reverse | .[0] | 
+                  "📅 Date: \(.date)\n💰 Total Cost: $\((.totalCost * 10000 | round) / 10000)\n🔍 Traces: \(.countTraces)\n📝 Observations: \(.countObservations)"
+                ')
+                echo "## 📈 Langfuse AI Cost Report" >> $GITHUB_STEP_SUMMARY
+                echo "$REPORT" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
