@@ -18,7 +18,7 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
       - name: 🔍 Run Linting
-        run: ./mvnw ktlint:check
+        run: ./mvnw ktlint:check -q
       - name: 🧪 Run Tests/
         run: ./mvnw test
       - name: 🔨 Build Project
@@ -117,8 +117,44 @@ jobs:
                 system: "Write a CHANGELOG section from conventional commits. Group by type (feat, fix, etc.). Be concise.",
                 messages: [{role: "user", content: ("Commits:\n" + $commits)}]
               }')" | jq -r '.content[0].text')
+            
             echo "## 📝 AI Generated Changelog" >> $GITHUB_STEP_SUMMARY
             echo "$CHANGELOG" >> $GITHUB_STEP_SUMMARY
+
+            # Update CHANGELOG.md following Justfile logic
+            TEMP_FILE=$(mktemp)
+            if [ -f "CHANGELOG.md" ]; then
+                if grep -q "^# Changelog" CHANGELOG.md; then
+                    NEW_CONTENT_FILE=$(mktemp)
+                    echo "$CHANGELOG" > "$NEW_CONTENT_FILE"
+                    awk -v newfile="$NEW_CONTENT_FILE" '
+                        BEGIN { inserted = 0 }
+                        !inserted && /^## \[/ {
+                            print ""
+                            while ((getline line < newfile) > 0) { print line }
+                            close(newfile)
+                            print ""
+                            inserted = 1
+                        }
+                        { print }
+                    ' CHANGELOG.md > "$TEMP_FILE"
+                    rm -f "$NEW_CONTENT_FILE"
+                else
+                    echo "$CHANGELOG" > "$TEMP_FILE"
+                    echo "" >> "$TEMP_FILE"
+                    cat CHANGELOG.md >> "$TEMP_FILE"
+                fi
+            else
+                echo "# Changelog" > "$TEMP_FILE"
+                echo "" >> "$TEMP_FILE"
+                echo "All notable changes to this project will be documented in this file." >> "$TEMP_FILE"
+                echo "" >> "$TEMP_FILE"
+                echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)," >> "$TEMP_FILE"
+                echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)." >> "$TEMP_FILE"
+                echo "" >> "$TEMP_FILE"
+                echo "$CHANGELOG" >> "$TEMP_FILE"
+            fi
+            mv "$TEMP_FILE" CHANGELOG.md
           fi
 
   observability:
