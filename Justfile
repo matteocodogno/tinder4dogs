@@ -668,3 +668,184 @@ changelog-save from_tag="" to_tag="":
     mv "$TEMP_FILE" CHANGELOG.md
 
     echo -e "{{ GREEN }}✅ Changelog saved to CHANGELOG.md{{ NC }}"
+
+# Generate changelog from latest commits (last N commits on current branch)
+changelog commits="10":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}📝 Generating changelog for last {{commits}} commits...{{ NC }}"
+
+    # Get the commit SHA that is N commits back
+    FROM_SHA=$(git rev-parse "HEAD~{{commits}}" 2>/dev/null || git rev-list --max-parents=0 HEAD)
+    just _changelog-generate "$FROM_SHA" "HEAD"
+
+# ============================================
+# CI Pipeline (Lint + Test + Build)
+# ============================================
+
+# Run linting via ktlint
+lint: check-mise
+    @echo "{{ BLUE }}🔍 Running ktlint...{{ NC }}"
+    @./mvnw ktlint:check -q
+    @echo "{{ GREEN }}✅ Lint passed{{ NC }}"
+
+# Full CI pipeline: lint → test → build
+ci: lint test build
+    @echo ""
+    @echo -e "{{ GREEN }}✅ CI pipeline passed{{ NC }}"
+
+# ============================================
+# ROLE: PR SUMMARIZER
+# ============================================
+
+# Generate AI-powered PR summary from current branch diff
+pr-summary base="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🔍 Generating AI PR summary vs {{base}}...{{ NC }}"
+
+    DIFF=$(git diff "origin/{{base}}...HEAD" -- '*.kt' '*.ts' '*.yml' '*.kts' 2>/dev/null \
+           || git diff "{{base}}...HEAD" -- '*.kt' '*.ts' '*.yml' '*.kts')
+
+    if [ -z "$DIFF" ]; then
+        echo -e "{{ YELLOW }}⚠️  No diff found vs {{base}}{{ NC }}"
+        exit 0
+    fi
+
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    COMMITS=$(git log "origin/{{base}}..HEAD" --oneline 2>/dev/null || git log "{{base}}..HEAD" --oneline)
+
+    PROMPT_FILE=$(mktemp)
+    DIFF_FILE=$(mktemp)
+    trap 'rm -f "$PROMPT_FILE" "$DIFF_FILE"' EXIT
+
+    echo "$DIFF" > "$DIFF_FILE"
+
+    PROMPT=$(jq -n \
+      --arg commits "$COMMITS" \
+      --arg diff "$(head -c 12000 "$DIFF_FILE")" \
+      '"Summarise the following PR diff concisely.\n\n## What changed\n## Why (infer from commits)\n## How to verify\n\nNever invent information not in the diff.\n\nCommits:\n" + $commits + "\n\nDiff:\n" + $diff')
+
+    echo "$PROMPT" | jq -r '.' > "$PROMPT_FILE"
+
+    echo ""
+    just _call_ai ci-summarizer "$PROMPT_FILE" task=pr_summary branch="$BRANCH"
+    echo ""
+    echo -e "{{ GREEN }}✅ PR summary complete{{ NC }}"
+
+# ============================================
+# Security Scanning
+# ============================================
+
+# Run Trivy vulnerability scan with AI triage of critical findings
+scan-trivy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🔒 Running Trivy vulnerability scan...{{ NC }}"
+
+    if ! command -v trivy &> /dev/null; then
+        echo -e "{{ RED }}❌ trivy not found. Install: brew install trivy{{ NC }}"
+        exit 1
+    fi
+
+    TRIVY_JSON=$(mktemp)
+    trap 'rm -f "$TRIVY_JSON"' EXIT
+
+    TRIVY_SKIP="--skip-dirs .claude,.git,.idea,reviews,target"
+
+    trivy fs . --format json --exit-code 0 --severity CRITICAL,HIGH --quiet $TRIVY_SKIP > "$TRIVY_JSON" 2>&1 || true
+
+    # Pretty-print table summary
+    trivy fs . --severity CRITICAL,HIGH --quiet $TRIVY_SKIP 2>/dev/null || true
+
+    CRITICAL_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' "$TRIVY_JSON" 2>/dev/null || echo 0)
+    HIGH_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' "$TRIVY_JSON" 2>/dev/null || echo 0)
+
+    echo ""
+    echo -e "{{ BLUE }}Summary: CRITICAL=$CRITICAL_COUNT  HIGH=$HIGH_COUNT{{ NC }}"
+
+    if [ "${CRITICAL_COUNT:-0}" -eq 0 ]; then
+        echo -e "{{ GREEN }}✅ No CRITICAL vulnerabilities — no AI triage needed{{ NC }}"
+        exit 0
+    fi
+
+    echo -e "{{ YELLOW }}⚠️  $CRITICAL_COUNT CRITICAL findings — running AI triage...{{ NC }}"
+
+    FINDINGS=$(jq -r '.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL") |
+        "- \(.VulnerabilityID): \(.Title) (pkg=\(.PkgName), fixedIn=\(.FixedVersion // "no fix"))"' \
+        "$TRIVY_JSON" 2>/dev/null | head -20)
+
+    PROMPT_FILE=$(mktemp)
+    trap 'rm -f "$PROMPT_FILE"' EXIT
+
+    jq -n --arg findings "$FINDINGS" \
+      '"Triage these CRITICAL vulnerabilities for a Spring Boot / Kotlin web application.\n" +
+       "For each finding:\n" +
+       "1. Real exploitability (reachable in a typical REST API?)\n" +
+       "2. Urgency: URGENT / HIGH / MEDIUM\n" +
+       "3. Recommended action (version bump, config, or no action needed)\n\n" +
+       "Be concise and actionable.\n\nFindings:\n" + $findings' \
+      | jq -r '.' > "$PROMPT_FILE"
+
+    echo ""
+    echo -e "{{ BLUE }}🤖 AI Triage:{{ NC }}"
+    just _call_ai reviewer "$PROMPT_FILE" task=security_triage
+    echo ""
+
+# Run Gitleaks secret detection
+scan-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🔐 Running Gitleaks secret detection...{{ NC }}"
+
+    if ! command -v gitleaks &> /dev/null; then
+        echo -e "{{ RED }}❌ gitleaks not found. Install: brew install gitleaks{{ NC }}"
+        exit 1
+    fi
+
+    if gitleaks detect --source . --no-banner --redact 2>&1; then
+        echo -e "{{ GREEN }}✅ No secrets detected{{ NC }}"
+    else
+        EXIT_CODE=$?
+        if [ "$EXIT_CODE" -eq 1 ]; then
+            echo -e "{{ RED }}❌ Secrets detected! Remove them from git history before pushing.{{ NC }}"
+            exit 1
+        fi
+        echo -e "{{ YELLOW }}⚠️  Gitleaks exited with code $EXIT_CODE{{ NC }}"
+    fi
+
+# ============================================
+# ROLE: COST REPORTER (Langfuse)
+# ============================================
+
+# Report AI cost per run from Langfuse (last N hours)
+cost-report hours="24":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    LANGFUSE_HOST="${LANGFUSE_HOST:-http://localhost:3000}"
+    echo -e "{{ BLUE }}💰 AI Cost Report (last {{hours}}h) — project: ${LANGFUSE_PROJECT}{{ NC }}"
+    echo ""
+
+    FROM_TS=$(date -u -d "-{{hours}} hours" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null \
+              || date -u -v-{{hours}}H "+%Y-%m-%dT%H:%M:%SZ")
+
+    RESPONSE=$(curl -s --fail-with-body \
+        -u "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}" \
+        "${LANGFUSE_HOST}/api/public/metrics/daily?fromTimestamp=${FROM_TS}" 2>/dev/null \
+        || echo '{"error":"unreachable"}')
+
+    if echo "$RESPONSE" | jq -e '.data' > /dev/null 2>&1; then
+        echo "$RESPONSE" | jq -r '
+            (.data // [])[] |
+            "  \(.date)  cost=$\((.totalCost // 0) * 10000 | round / 10000)  " +
+            "tokens(in=\(.inputTokens // 0) out=\(.outputTokens // 0))"
+        '
+        TOTAL=$(echo "$RESPONSE" | jq '[(.data // [])[]? .totalCost // 0] | add // 0 | . * 10000 | round / 10000')
+        echo ""
+        echo -e "{{ BLUE }}  Total: \$$TOTAL{{ NC }}"
+    else
+        echo -e "{{ YELLOW }}⚠️  Langfuse unreachable or no data. Is the service running?{{ NC }}"
+        echo -e "{{ YELLOW }}   Run: just ai-start  |  Dashboard: $LANGFUSE_HOST{{ NC }}"
+    fi
+    echo ""
