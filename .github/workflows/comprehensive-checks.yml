@@ -17,12 +17,12 @@ jobs:
           java-version: '24'
           distribution: 'temurin'
           cache: 'maven'
+      - name: 🔨 Build Project
+        run: ./mvnw clean install -DskipTests
       - name: 🔍 Run Linting
         run: ./mvnw ktlint:check -q
       - name: 🧪 Run Tests/
         run: ./mvnw test
-      - name: 🔨 Build Project
-        run: ./mvnw clean install -DskipTests
 
   security-scan:
     name: Security Scans (Gitleaks & Trivy AI Triage)
