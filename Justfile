@@ -47,7 +47,24 @@ help:
     @echo "  just build              - Build the project"
     @echo "  just run                - Run Spring Boot app"
     @echo "  just test               - Run tests"
+    @echo "  just lint               - Run linting"
+    @echo "  just run-linting        - Run linting, tests and build"
     @echo "  just clean              - Clean build artifacts"
+    @echo ""
+    @echo "{{ BLUE }}Security:{{ NC }}"
+    @echo "  just scan               - Run Trivy vulnerability scan"
+    @echo "  just secret-scan        - Run Gitleaks secret detection"
+    @echo ""
+    @echo "{{ BLUE }}AI Tools:{{ NC }}"
+    @echo "  just commit             - Generate commit message and commit"
+    @echo "  just review [file]      - Review a specific file"
+    @echo "  just pr-summary [base]  - Generate a PR summary (default base: main)"
+    @echo "  just gen-tests [file]   - Generate tests for a file"
+    @echo ""
+    @echo "{{ BLUE }}Observability (Langfuse):{{ NC }}"
+    @echo "  just langfuse           - Open Langfuse UI"
+    @echo "  just langfuse-report    - Show usage and costs report"
+
 
 # ============================================
 # Infrastructure Management
@@ -131,6 +148,7 @@ check-tools:
     check_tool just
     check_tool direnv
     check_tool gitleaks
+    check_tool trivy
 
     # Optional but recommended
     if command -v infisical &> /dev/null || command -v op &> /dev/null; then
@@ -277,6 +295,17 @@ build-fast: check-mise
     @./mvnw clean install -DskipTests
     @echo "{{ GREEN }}✅ Build complete{{ NC }}"
 
+# Run linting
+lint: check-mise
+    @echo "{{ BLUE }}🔍 Running linting...{{ NC }}"
+    @./mvnw ktlint:check
+
+# Run linting, tests and build
+run-linting: check-mise
+    @echo "{{ BLUE }}🚀 Running linting, tests and build...{{ NC }}"
+    @./mvnw ktlint:check clean install
+    @echo "{{ GREEN }}✅ Linting, tests and build complete{{ NC }}"
+
 # Run Spring Boot application
 run: check-mise
     @echo "{{ BLUE }}🚀 Starting Tinder for Dogs...{{ NC }}"
@@ -315,6 +344,53 @@ package: check-mise
     @echo "{{ BLUE }}📦 Packaging application...{{ NC }}"
     @./mvnw clean package -DskipTests
     @echo "{{ GREEN }}✅ JAR created: target/{{PROJECT_NAME}}.jar{{ NC }}"
+
+
+# ============================================
+# Langfuse Observability
+# ============================================
+
+# Open Langfuse UI
+langfuse:
+    @echo "{{ BLUE }}🌐 Opening Langfuse UI...{{ NC }}"
+    @open http://localhost:3000
+
+# Show Langfuse usage and costs report
+langfuse-report:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}📊 Langfuse Cost Report:{{ NC }}"
+    echo ""
+    
+    RESPONSE=$(curl -s -u "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}" \
+      "http://localhost:3000/api/public/metrics/daily")
+    
+    if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+        echo -e "{{ RED }}❌ Langfuse API Error:{{ NC }}"
+        echo "$RESPONSE" | jq '.error'
+        exit 1
+    fi
+
+    echo "$RESPONSE" | jq -r '
+      .data | sort_by(.date) | reverse | .[] | 
+      "📅 Date: \(.date)\n-------------------\n💰 Total Cost: $\((.totalCost * 10000 | round) / 10000)\n🔍 Traces: \(.countTraces)\n📝 Observations: \(.countObservations)\n\nUsage by Model:\n" +
+      (.usage | map("  - \(.model): $\((.totalCost * 10000 | round) / 10000) (\(.totalUsage) tokens)") | join("\n")) +
+      "\n"
+    '
+
+# ============================================
+# Security & Compliance
+# ============================================
+
+# Run vulnerability scan with Trivy
+scan: check-mise
+    @echo "{{ BLUE }}🔍 Running Trivy vulnerability scan...{{ NC }}"
+    @trivy fs .
+
+# Run Gitleaks secret detection
+secret-scan: check-mise
+    @echo "{{ BLUE }}🔍 Running Gitleaks secret detection...{{ NC }}"
+    @gitleaks detect --verbose --redact
 
 
 # ============================================
@@ -458,6 +534,53 @@ review file:
 
     echo ""
     echo -e "{{ GREEN }}✅ Review saved to: $REVIEW_FILE{{ NC }}"
+
+# Generate a PR summary for current branch
+pr-summary base="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Get the diff between the base branch and HEAD
+    # Using merge-base to only get changes in the current branch
+    BASE_COMMIT=$(git merge-base {{base}} HEAD || echo "")
+    if [ -z "$BASE_COMMIT" ]; then
+        echo -e "{{ RED }}❌ Could not find merge base for {{base}}{{ NC }}"
+        exit 1
+    fi
+    
+    DIFF=$(git diff "$BASE_COMMIT"..HEAD)
+
+    if [ -z "$DIFF" ]; then
+      echo -e "{{ YELLOW }}⚠️  No changes between {{base}} and current branch{{ NC }}"
+      exit 0
+    fi
+
+    TEMPLATE=$(cat prompts/templates/pr_summary.md)
+    
+    # Create prompt by replacing placeholders
+    PROMPT_FILE=$(mktemp)
+    trap 'rm -f "$PROMPT_FILE"' EXIT
+    
+    # Use a variable to avoid issues with large diffs in string replacement if possible
+    # but since Justfile is bash, we'll try to be safe.
+    # Actually, the ${VAR//OLD/NEW} might fail for very large strings.
+    # Better to use a more robust way to inject the diff.
+    echo "$TEMPLATE" | sed "/\[\[DIFF\]\]/r /dev/stdin" > "$PROMPT_FILE" <<< "$DIFF"
+    # Wait, sed /r/ doesn't replace the tag, it appends after. 
+    # Let's just use the bash replacement for now as it's common in this Justfile,
+    # but DIFF could be huge.
+    
+    # Let's follow the style of commit-msg:
+    # PROMPT="${TEMPLATE//\[\[DIFF\]\]/$DIFF}"
+    # echo "$PROMPT" > "$PROMPT_FILE"
+    
+    # To be safer with large diffs, I'll use a temp file and sed to replace the placeholder
+    sed -e "/\[\[DIFF\]\]/ {" -e "r /dev/stdin" -e "d" -e "}" prompts/templates/pr_summary.md > "$PROMPT_FILE" <<< "$DIFF"
+
+    echo -e "{{ BLUE }}📝 Generating PR summary for changes since {{base}}...{{ NC }}"
+    echo ""
+    
+    just _call_ai reviewer "$PROMPT_FILE" task=pr_summary base="{{base}}"
 
 # ============================================
 # ROLE: TESTER (Test Generation)
