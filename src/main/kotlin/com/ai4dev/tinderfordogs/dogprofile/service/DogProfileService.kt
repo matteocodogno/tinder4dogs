@@ -5,8 +5,7 @@ import com.ai4dev.tinderfordogs.dogprofile.model.DogMatchResponse
 import com.ai4dev.tinderfordogs.dogprofile.model.DogProfile
 import com.ai4dev.tinderfordogs.dogprofile.model.DogProfileResponse
 import com.ai4dev.tinderfordogs.dogprofile.repository.DogProfileRepository
-import com.ai4dev.tinderfordogs.match.model.Dog
-import com.ai4dev.tinderfordogs.match.service.DogMatcherService
+import com.ai4dev.tinderfordogs.match.service.LLMDogMatcherService
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -17,7 +16,7 @@ private val logger = KotlinLogging.logger {}
 @Service
 class DogProfileService(
     private val repository: DogProfileRepository,
-    private val matcherService: DogMatcherService,
+    private val matcherService: LLMDogMatcherService,
 ) {
     @Transactional
     fun create(request: CreateDogProfileRequest): DogProfileResponse {
@@ -47,25 +46,15 @@ class DogProfileService(
             repository.findById(id).orElseThrow {
                 NoSuchElementException("Dog profile not found: $id")
             }
-        val targetDog = target.toDog()
         return repository
             .findAll()
             .filter { it.id != id }
             .map { candidate ->
-                val score = matcherService.calculateCompatibility(targetDog, candidate.toDog())
-                DogMatchResponse(dog = candidate.toResponse(), compatibilityScore = score)
+                val result = matcherService.calculateCompatibility(target, candidate)
+                DogMatchResponse(dog = candidate.toResponse(), compatibilityScore = result.score.toDouble())
             }.sortedByDescending { it.compatibilityScore }
             .take(limit)
     }
-
-    private fun DogProfile.toDog() =
-        Dog(
-            id = id.hashCode().toLong(),
-            name = name,
-            breed = breed,
-            age = age,
-            gender = gender.name,
-        )
 
     private fun DogProfile.toResponse() =
         DogProfileResponse(

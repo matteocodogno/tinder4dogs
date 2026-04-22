@@ -793,7 +793,7 @@ cost-report days="1":
               ("$" + (.cost * 10000 | round / 10000 | tostring)),
               (.tokens|tostring)])
       | @tsv
-    ' | column -t
+    ' | awk 'BEGIN{FS="\t"} {for(i=1;i<=NF;i++) if(length($i)>w[i]) w[i]=length($i); rows[NR]=$0} END{for(r=1;r<=NR;r++){n=split(rows[r],f,"\t"); for(i=1;i<=n;i++) printf "%-*s  ",w[i],f[i]; print ""}}'
 
     echo ""
 
@@ -821,7 +821,7 @@ cost-report days="1":
               ("$" + (.cost * 10000 | round / 10000 | tostring)),
               (.tokens|tostring)])
       | @tsv
-    ' | column -t
+    ' | awk 'BEGIN{FS="\t"} {for(i=1;i<=NF;i++) if(length($i)>w[i]) w[i]=length($i); rows[NR]=$0} END{for(r=1;r<=NR;r++){n=split(rows[r],f,"\t"); for(i=1;i<=n;i++) printf "%-*s  ",w[i],f[i]; print ""}}'
 
     echo ""
 

@@ -1,52 +1,254 @@
-name: AI PR Summary
+name: CI
+
 on:
+  push:
+    branches: [main]
   pull_request:
-    types: [ opened, synchronize ]
+
 permissions:
-  pull-requests: write
   contents: read
+
 jobs:
-  summarize:
+  # ── 1. Lint · Test · Build ──────────────────────────────────────────────────
+  build:
+    name: Lint · Test · Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: maven
+
+      - name: Lint (ktlint)
+        run: ./mvnw ktlint:check -q
+
+      - name: Test
+        run: ./mvnw test
+
+      - name: Build (skip tests)
+        run: ./mvnw package -DskipTests -q
+
+      - name: Upload JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/*.jar
+          retention-days: 3
+
+  # ── 2. Gitleaks Secret Detection ────────────────────────────────────────────
+  secret-scan:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Generate diff
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── 3. Trivy Vulnerability Scan + AI Triage ─────────────────────────────────
+  vuln-scan:
+    name: Trivy + AI Triage
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy (JSON)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          format: json
+          output: trivy-results.json
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+
+      - name: Count findings
+        id: count
         run: |
-          git diff origin/${{ github.base_ref }}..HEAD -- '*.kt' '*.ts' '*.yml' > /tmp/pr.diff
-      - name: Generate AI summary
+          COUNT=$(jq '[.Results[]?.Vulnerabilities // [] | .[]] | length' trivy-results.json)
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "CRITICAL/HIGH findings: $COUNT"
+
+      - name: AI triage
+        if: steps.count.outputs.count != '0'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          COUNT="${{ steps.count.outputs.count }}"
+
+          FINDINGS=$(jq -c '[.Results[]?.Vulnerabilities // [] | .[] |
+            {id: .VulnerabilityID, pkg: .PkgName, severity: .Severity,
+             title: .Title, description: (.Description // "" | .[0:200])}
+          ] | .[:20]' trivy-results.json)
+
+          SYSTEM_PROMPT="You are a security engineer triaging vulnerability scan results for a Kotlin/Spring Boot application. Produce a triage report with sections: ### Critical — Fix Immediately, ### High — Fix This Sprint, ### Accepted Risk / False Positive (each as markdown tables with columns CVE | Package | Impact | Fix, or CVE | Package | Reason for accepted risk), ## Recommended actions (numbered list), ## Notes. Omit empty sections. Do NOT add text outside this structure."
+
+          USER_PROMPT="Severity filter: CRITICAL,HIGH\nTotal findings: $COUNT\n\nFindings (JSON):\n$FINDINGS"
+
+          TRIAGE=$(curl -sf https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+              --arg sys "$SYSTEM_PROMPT" \
+              --arg usr "$USER_PROMPT" \
+              '{
+                model: "claude-haiku-4-5-20251001",
+                max_tokens: 1500,
+                system: $sys,
+                messages: [{role: "user", content: $usr}]
+              }')" | jq -r '.content[0].text')
+
+          {
+            echo "## 🛡️ Trivy AI Triage"
+            echo ""
+            echo "**Findings:** $COUNT CRITICAL/HIGH"
+            echo ""
+            echo "$TRIAGE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: No findings
+        if: steps.count.outputs.count == '0'
+        run: echo "✅ No CRITICAL/HIGH vulnerabilities found" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── 4. AI PR Summary ────────────────────────────────────────────────────────
+  pr-summary:
+    name: AI PR Summary
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate PR summary
         id: summary
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          DIFF=$(head -c 12000 /tmp/pr.diff)
-          SUMMARY=$(curl -s https://api.anthropic.com/v1/messages \
+          BASE="origin/${{ github.base_ref }}"
+          MERGE_BASE=$(git merge-base "$BASE" HEAD)
+          DIFF=$(git diff "$MERGE_BASE" HEAD | head -c 15000)
+          COMMITS=$(git log "$MERGE_BASE..HEAD" --pretty=format:"%h %s" --no-merges)
+
+          SYSTEM_PROMPT="You are a senior engineer writing a pull request description. Output ONLY the PR description using these sections: ## Summary (bullets, imperative mood), ## Motivation (1-2 sentences: why, not what), ## Changes (markdown table: Area | What changed), ## Testing (checkbox list), ## Notes (optional, omit if empty). No text outside this structure."
+
+          USER_PROMPT="Branch: ${{ github.head_ref }}
+          Base: ${{ github.base_ref }}
+
+          Commits:
+          $COMMITS
+
+          Diff:
+          $DIFF"
+
+          SUMMARY=$(curl -sf https://api.anthropic.com/v1/messages \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -H "content-type: application/json" \
-            -d "$(jq -n --arg diff "$DIFF" --arg title "${{ github.event.pull_request.title }}" '{
-              model: "claude-haiku-4-5-20251001",
-              max_tokens: 600,
-              system: "Summarise PR diffs concisely. Sections: What changed / Why / How to verify. Never invent information not in the diff.",
-              messages: [{role: "user", content: ("PR: " + $title + "\n\nDiff:\n" + $diff)}]
-            }')" | jq -r '.content[0].text')
-          echo "summary<<EOF" >> $GITHUB_OUTPUT
-          echo "$SUMMARY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+            -d "$(jq -n \
+              --arg sys "$SYSTEM_PROMPT" \
+              --arg usr "$USER_PROMPT" \
+              '{
+                model: "claude-haiku-4-5-20251001",
+                max_tokens: 800,
+                system: $sys,
+                messages: [{role: "user", content: $usr}]
+              }')" | jq -r '.content[0].text')
+
+          echo "summary<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$SUMMARY" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
       - name: Post or update PR comment
-        uses: actions/github-script@v8
+        uses: actions/github-script@v7
         with:
           script: |
             const summary = ${{ toJSON(steps.summary.outputs.summary) }};
-            const body = `## 🤖 AI-Generated Summary\n\n${summary}\n\n---\n*Generated by Claude*`;
-            const { data: comments } = await github.rest.issues.listComments(
-              { owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
-            const existing = comments.find(c => c.body.includes('🤖 AI-Generated Summary'));
+            const body = [
+              '## 🤖 AI PR Summary',
+              '',
+              summary,
+              '',
+              '---',
+              '*Generated by Claude (`claude-haiku-4-5-20251001`)*'
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const existing = comments.find(c => c.body.includes('🤖 AI PR Summary'));
             if (existing) {
-              await github.rest.issues.updateComment(
-                { owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
             } else {
-              await github.rest.issues.createComment(
-                { owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
             }
+
+  # ── 5. AI Changelog (push to main only) ─────────────────────────────────────
+  changelog:
+    name: AI Changelog
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 30
+
+      - name: Generate changelog
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          GIT_LOG=$(git log -20 --pretty=format:"%s%n%b" --no-merges)
+
+          SYSTEM_PROMPT="Generate a changelog section from conventional commits using Keep a Changelog format (https://keepachangelog.com). Group under: ### Features (feat), ### Bug Fixes (fix), ### Refactoring (refactor), ### Chores (chore/ci/build/deps). Omit docs/style/test/perf unless BREAKING CHANGE. Bold BREAKING CHANGE entries. One bullet per commit. Strip type(scope): prefix. Imperative mood, lowercase first word, no trailing period. Output ONLY the changelog block, nothing else."
+
+          USER_PROMPT="Last 20 commits (subject + body):\n\n$GIT_LOG"
+
+          CHANGELOG=$(curl -sf https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$(jq -n \
+              --arg sys "$SYSTEM_PROMPT" \
+              --arg usr "$USER_PROMPT" \
+              '{
+                model: "claude-haiku-4-5-20251001",
+                max_tokens: 600,
+                system: $sys,
+                messages: [{role: "user", content: $usr}]
+              }')" | jq -r '.content[0].text')
+
+          {
+            echo "## 📋 Changelog (last 20 commits)"
+            echo ""
+            echo "$CHANGELOG"
+          } >> "$GITHUB_STEP_SUMMARY"
