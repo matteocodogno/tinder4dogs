@@ -39,28 +39,33 @@ class DogProfileService(
     fun findAll(): List<DogProfileResponse> = repository.findAll().map { it.toResponse() }
 
     @Transactional(readOnly = true)
-    fun findMatches(id: UUID, limit: Int): List<DogMatchResponse> {
-        val target = repository.findById(id).orElseThrow {
-            NoSuchElementException("Dog profile not found: $id")
-        }
+    fun findMatches(
+        id: UUID,
+        limit: Int,
+    ): List<DogMatchResponse> {
+        val target =
+            repository.findById(id).orElseThrow {
+                NoSuchElementException("Dog profile not found: $id")
+            }
         val targetDog = target.toDog()
-        return repository.findAll()
+        return repository
+            .findAll()
             .filter { it.id != id }
             .map { candidate ->
                 val score = matcherService.calculateCompatibility(targetDog, candidate.toDog())
                 DogMatchResponse(dog = candidate.toResponse(), compatibilityScore = score)
-            }
-            .sortedByDescending { it.compatibilityScore }
+            }.sortedByDescending { it.compatibilityScore }
             .take(limit)
     }
 
-    private fun DogProfile.toDog() = Dog(
-        id = id.hashCode().toLong(),
-        name = name,
-        breed = breed,
-        age = age,
-        gender = gender.name,
-    )
+    private fun DogProfile.toDog() =
+        Dog(
+            id = id.hashCode().toLong(),
+            name = name,
+            breed = breed,
+            age = age,
+            gender = gender.name,
+        )
 
     private fun DogProfile.toResponse() =
         DogProfileResponse(

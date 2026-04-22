@@ -41,8 +41,7 @@ class DogProfileController(
 
     @ExceptionHandler(NoSuchElementException::class)
     @ResponseStatus(HttpStatus.NOT_FOUND)
-    fun handleNotFound(ex: NoSuchElementException): ErrorResponse =
-        ErrorResponse(code = "NOT_FOUND", message = ex.message ?: "Not found")
+    fun handleNotFound(ex: NoSuchElementException): ErrorResponse = ErrorResponse(code = "NOT_FOUND", message = ex.message ?: "Not found")
 
     @ExceptionHandler(MethodArgumentNotValidException::class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)

@@ -13,11 +13,9 @@ import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabas
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
-
-import org.testcontainers.postgresql.PostgreSQLContainer
-
-import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
+import org.testcontainers.postgresql.PostgreSQLContainer
 import kotlin.collections.sortedDescending
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

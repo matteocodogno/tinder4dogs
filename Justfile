@@ -12,6 +12,7 @@ LITELLM_KEY := env_var('LITELLM_MASTER_KEY')
 # Project configuration
 PROJECT_NAME := "tinder-for-dogs"
 LANGFUSE_PROJECT := env_var_or_default('LANGFUSE_PROJECT', 'whysoserious')
+LANGFUSE_URL := env_var_or_default('LANGFUSE_URL', 'http://localhost:3000')
 
 # Colors for output
 RED := '\033[0;31m'
@@ -421,6 +422,56 @@ commit:
     fi
 
 # ============================================
+# ROLE: COMMITTER (Changelog)
+# ============================================
+
+# Generate a Keep-a-Changelog between two refs (default: last tag → HEAD)
+changelog from="" to="HEAD":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    FROM="{{from}}"
+    TO="{{to}}"
+
+    # Default FROM to the latest annotated/lightweight tag
+    if [ -z "$FROM" ]; then
+        FROM=$(git describe --tags --abbrev=0 2>/dev/null || true)
+        if [ -z "$FROM" ]; then
+            echo -e "{{ RED }}❌ No tags found. Provide an explicit FROM ref:{{ NC }}"
+            echo -e "   just changelog <from> [to]"
+            exit 1
+        fi
+    fi
+
+    echo -e "{{ BLUE }}📋 Collecting commits $FROM..$TO...{{ NC }}"
+
+    GIT_LOG=$(git log "$FROM..$TO" --pretty=format:"%s%n%b" --no-merges)
+
+    if [ -z "$GIT_LOG" ]; then
+        echo -e "{{ YELLOW }}⚠️  No commits found between $FROM and $TO{{ NC }}"
+        exit 0
+    fi
+
+    TEMPLATE=$(cat prompts/templates/changelog.md)
+
+    # Replace template placeholders
+    PROMPT="${TEMPLATE//\[\[GIT_LOG\]\]/$GIT_LOG}"
+    PROMPT="${PROMPT//\[\[FROM\]\]/$FROM}"
+    PROMPT="${PROMPT//\[\[TO\]\]/$TO}"
+
+    TEMP_PROMPT=$(mktemp)
+    trap 'rm -f "$TEMP_PROMPT"' EXIT
+    echo "$PROMPT" > "$TEMP_PROMPT"
+
+    mkdir -p changelogs
+    CHANGELOG_FILE="changelogs/CHANGELOG-${TO//\//-}-$(date +%Y%m%d-%H%M%S).md"
+
+    just _call_ai committer "$TEMP_PROMPT" task=changelog from="$FROM" to="$TO" | tee "$CHANGELOG_FILE"
+
+    echo ""
+    echo -e "{{ GREEN }}✅ Changelog saved to: $CHANGELOG_FILE{{ NC }}"
+
+# ============================================
 # ROLE: REVIEWER (Code Review)
 # ============================================
 
@@ -514,3 +565,266 @@ compare-models prompt="Explain what a token is in 2 sentences":
       -H "Authorization: Bearer {{LITELLM_KEY}}" \
       -d '{"model":"local-fast","messages":[{"role":"user","content":"{{prompt}}"}]}' \
       | jq -r '.choices[0].message.content'
+
+# ============================================
+# CI Pipeline
+# ============================================
+
+# Run lint
+lint: check-mise
+    @echo "{{ BLUE }}🔍 Running ktlint...{{ NC }}"
+    @./mvnw ktlint:check
+    @echo "{{ GREEN }}✅ Lint passed{{ NC }}"
+
+# Run lint, tests, and build in sequence
+ci: check-mise
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo -e "{{ BLUE }}[1/3] 🔍 Linting...{{ NC }}"
+    ./mvnw ktlint:check
+    echo -e "{{ GREEN }}    ✅ Lint passed{{ NC }}"
+    echo ""
+
+    echo -e "{{ BLUE }}[2/3] 🧪 Running tests...{{ NC }}"
+    ./mvnw test
+    echo -e "{{ GREEN }}    ✅ Tests passed{{ NC }}"
+    echo ""
+
+    echo -e "{{ BLUE }}[3/3] 🔨 Building (skip tests)...{{ NC }}"
+    ./mvnw package -DskipTests
+    echo -e "{{ GREEN }}    ✅ Build complete{{ NC }}"
+    echo ""
+
+    echo -e "{{ GREEN }}🚀 CI pipeline passed{{ NC }}"
+
+# ============================================
+# ROLE: REVIEWER (PR Summary)
+# ============================================
+
+# Generate an AI PR summary from current branch diff (default base: main)
+pr-summary base="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    BRANCH=$(git branch --show-current)
+    MERGE_BASE=$(git merge-base "{{base}}" HEAD)
+    DIFF=$(git diff "$MERGE_BASE" HEAD)
+    COMMITS=$(git log "$MERGE_BASE..HEAD" --pretty=format:"%h %s" --no-merges)
+
+    if [ -z "$DIFF" ]; then
+        echo -e "{{ YELLOW }}⚠️  No diff between {{base}} and $BRANCH{{ NC }}"
+        exit 0
+    fi
+
+    TEMPLATE=$(cat prompts/templates/pr_summary.md)
+    PROMPT="${TEMPLATE//\[\[BRANCH\]\]/$BRANCH}"
+    PROMPT="${PROMPT//\[\[BASE\]\]/{{base}}}"
+    PROMPT="${PROMPT//\[\[COMMITS\]\]/$COMMITS}"
+    PROMPT="${PROMPT//\[\[DIFF\]\]/$DIFF}"
+
+    TEMP_PROMPT=$(mktemp)
+    trap 'rm -f "$TEMP_PROMPT"' EXIT
+    echo "$PROMPT" > "$TEMP_PROMPT"
+
+    mkdir -p reviews
+    OUT="reviews/pr-summary-${BRANCH//\//-}-$(date +%Y%m%d-%H%M%S).md"
+
+    echo -e "{{ BLUE }}📝 Generating PR summary for $BRANCH → {{base}}...{{ NC }}"
+    just _call_ai reviewer "$TEMP_PROMPT" task=pr_summary branch="$BRANCH" base="{{base}}" | tee "$OUT"
+
+    echo ""
+    echo -e "{{ GREEN }}✅ PR summary saved to: $OUT{{ NC }}"
+
+# ============================================
+# Security Scanning
+# ============================================
+
+# Run Gitleaks secret detection (fails on findings)
+scan-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🔐 Running Gitleaks secret detection...{{ NC }}"
+
+    if gitleaks detect --source . --no-banner 2>&1; then
+        echo -e "{{ GREEN }}✅ No secrets detected{{ NC }}"
+    else
+        echo -e "{{ RED }}❌ Secrets detected — review findings above{{ NC }}"
+        exit 1
+    fi
+
+# Run Trivy vulnerability scan with AI triage (default: CRITICAL,HIGH)
+scan-vuln severity="CRITICAL,HIGH":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}🛡️  Running Trivy scan ({{severity}})...{{ NC }}"
+
+    REPORT=$(mktemp --suffix=.json)
+    trap 'rm -f "$REPORT"' EXIT
+
+    trivy fs . --format json --severity "{{severity}}" --quiet -o "$REPORT"
+
+    VULN_COUNT=$(jq '[.Results[]? | .Vulnerabilities? // [] | .[]] | length' "$REPORT")
+
+    if [ "$VULN_COUNT" -eq 0 ]; then
+        echo -e "{{ GREEN }}✅ No {{severity}} vulnerabilities found{{ NC }}"
+        exit 0
+    fi
+
+    echo -e "{{ YELLOW }}⚠️  Found $VULN_COUNT finding(s). Running AI triage...{{ NC }}"
+    echo ""
+
+    # Cap at 20 findings to keep prompt size manageable
+    FINDINGS=$(jq '[.Results[]? | .Vulnerabilities? // [] | .[] |
+      {id: .VulnerabilityID, pkg: .PkgName, severity: .Severity,
+       title: .Title, description: (.Description // "" | .[0:200])}
+    ] | .[:20]' "$REPORT")
+
+    TEMPLATE=$(cat prompts/templates/trivy_triage.md)
+    PROMPT="${TEMPLATE//\[\[SEVERITY\]\]/{{severity}}}"
+    PROMPT="${PROMPT//\[\[COUNT\]\]/$VULN_COUNT}"
+    PROMPT="${PROMPT//\[\[FINDINGS\]\]/$FINDINGS}"
+
+    TEMP_PROMPT=$(mktemp)
+    trap 'rm -f "$TEMP_PROMPT"' EXIT
+    echo "$PROMPT" > "$TEMP_PROMPT"
+
+    mkdir -p reviews
+    OUT="reviews/trivy-triage-$(date +%Y%m%d-%H%M%S).md"
+
+    just _call_ai reviewer "$TEMP_PROMPT" task=trivy_triage severity="{{severity}}" | tee "$OUT"
+
+    echo ""
+    echo -e "{{ GREEN }}✅ Triage report saved to: $OUT{{ NC }}"
+
+# ============================================
+# ROLE: COMMITTER (Changelog — no tag required)
+# ============================================
+
+# Generate changelog for the last N commits on the current branch (no tags needed)
+changelog-recent n="20":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    GIT_LOG=$(git log -"{{n}}" --pretty=format:"%s%n%b" --no-merges)
+
+    if [ -z "$GIT_LOG" ]; then
+        echo -e "{{ YELLOW }}⚠️  No commits found{{ NC }}"
+        exit 0
+    fi
+
+    FROM="HEAD~{{n}}"
+    TO="HEAD ($(git rev-parse --short HEAD))"
+
+    echo -e "{{ BLUE }}📋 Generating changelog for last {{n}} commits...{{ NC }}"
+
+    TEMPLATE=$(cat prompts/templates/changelog.md)
+    PROMPT="${TEMPLATE//\[\[GIT_LOG\]\]/$GIT_LOG}"
+    PROMPT="${PROMPT//\[\[FROM\]\]/$FROM}"
+    PROMPT="${PROMPT//\[\[TO\]\]/$TO}"
+
+    TEMP_PROMPT=$(mktemp)
+    trap 'rm -f "$TEMP_PROMPT"' EXIT
+    echo "$PROMPT" > "$TEMP_PROMPT"
+
+    mkdir -p changelogs
+    CHANGELOG_FILE="changelogs/CHANGELOG-recent-$(date +%Y%m%d-%H%M%S).md"
+
+    just _call_ai committer "$TEMP_PROMPT" task=changelog | tee "$CHANGELOG_FILE"
+
+    echo ""
+    echo -e "{{ GREEN }}✅ Changelog saved to: $CHANGELOG_FILE{{ NC }}"
+
+# ============================================
+# Langfuse Cost Reporting
+# ============================================
+
+# Report AI cost per run from Langfuse (default: last 1 day)
+cost-report days="1":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo -e "{{ BLUE }}💰 Fetching AI cost from Langfuse (last {{days}} day(s))...{{ NC }}"
+    echo ""
+
+    # ISO-8601 timestamp for N days ago (GNU date / BSD date compatible)
+    SINCE=$(date -d "-{{days}} days" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+         || date -v-{{days}}d -u +%Y-%m-%dT%H:%M:%SZ)
+
+    AUTH=$(printf "%s:%s" "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" | base64 -w 0 2>/dev/null || \
+           printf "%s:%s" "$LANGFUSE_PUBLIC_KEY" "$LANGFUSE_SECRET_KEY" | base64)
+
+    RESPONSE=$(curl -s \
+      -H "Authorization: Basic $AUTH" \
+      "{{LANGFUSE_URL}}/api/public/observations?type=GENERATION&fromStartTime=${SINCE}&limit=100&page=1")
+
+    # Check for API error
+    if echo "$RESPONSE" | jq -e '.error // .message' > /dev/null 2>&1; then
+        echo -e "{{ RED }}❌ Langfuse API error:{{ NC }}"
+        echo "$RESPONSE" | jq '.error // .message'
+        exit 1
+    fi
+
+    TOTAL=$(echo "$RESPONSE" | jq '.meta.totalItems // (.data | length)')
+    echo -e "{{ BLUE }}Total generations: $TOTAL{{ NC }}"
+    echo ""
+
+    # Per-task breakdown
+    echo -e "{{ BLUE }}── Cost by task ────────────────────────────────{{ NC }}"
+    echo "$RESPONSE" | jq -r '
+      [ .data[] |
+        {
+          task:  (.metadata.task  // "—"),
+          model: (.model          // "unknown"),
+          cost:  (.calculatedTotalCost // 0),
+          tokens: ((.usage.totalTokens // .usage.total // 0) | tonumber)
+        }
+      ] |
+      group_by(.task) |
+      map({
+        task:   .[0].task,
+        runs:   length,
+        cost:   ([.[].cost]   | add),
+        tokens: ([.[].tokens] | add)
+      }) |
+      sort_by(-.cost) |
+      ["Task", "Runs", "USD", "Tokens"],
+      ["----", "----", "---", "------"],
+      (.[] | [.task, (.runs|tostring),
+              ("$" + (.cost * 10000 | round / 10000 | tostring)),
+              (.tokens|tostring)])
+      | @tsv
+    ' | column -t
+
+    echo ""
+
+    # Per-model breakdown
+    echo -e "{{ BLUE }}── Cost by model ───────────────────────────────{{ NC }}"
+    echo "$RESPONSE" | jq -r '
+      [ .data[] |
+        {
+          model: (.model // "unknown"),
+          cost:  (.calculatedTotalCost // 0),
+          tokens: ((.usage.totalTokens // .usage.total // 0) | tonumber)
+        }
+      ] |
+      group_by(.model) |
+      map({
+        model:  .[0].model,
+        runs:   length,
+        cost:   ([.[].cost]   | add),
+        tokens: ([.[].tokens] | add)
+      }) |
+      sort_by(-.cost) |
+      ["Model", "Runs", "USD", "Tokens"],
+      ["-----", "----", "---", "------"],
+      (.[] | [.model, (.runs|tostring),
+              ("$" + (.cost * 10000 | round / 10000 | tostring)),
+              (.tokens|tostring)])
+      | @tsv
+    ' | column -t
+
+    echo ""
+
+    # Grand total
+    GRAND=$(echo "$RESPONSE" | jq '[.data[].calculatedTotalCost // 0] | add')
+    echo -e "{{ GREEN }}Grand total (last {{days}} day(s)): \$${GRAND}{{ NC }}"
