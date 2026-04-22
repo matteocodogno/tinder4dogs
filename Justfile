@@ -380,6 +380,41 @@ package: check-mise
 # Helper: Call AI with role
 # ============================================
 
+# Internal: Call Anthropic API directly (for CI)
+_call_anthropic prompt_file:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    ANTHROPIC_KEY="${ANTHROPIC_API_KEY:-}"
+    if [ -z "$ANTHROPIC_KEY" ]; then
+        echo -e "{{ RED }}❌ ANTHROPIC_API_KEY not set{{ NC }}" >&2
+        exit 1
+    fi
+
+    PROMPT_CONTENT=$(cat "{{prompt_file}}")
+
+    JSON_PAYLOAD=$(jq -n \
+      --arg content "$PROMPT_CONTENT" \
+      '{
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        messages: [{role: "user", content: $content}]
+      }')
+
+    RESPONSE=$(curl -s -X POST https://api.anthropic.com/v1/messages \
+      -H "x-api-key: $ANTHROPIC_KEY" \
+      -H "anthropic-version: 2023-06-01" \
+      -H "content-type: application/json" \
+      -d "$JSON_PAYLOAD")
+
+    if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+        echo -e "{{ RED }}❌ API Error:{{ NC }}" >&2
+        echo "$RESPONSE" | jq '.error' >&2
+        exit 1
+    fi
+
+    echo "$RESPONSE" | jq -r '.content[0].text'
+
 # Internal: Call AI with specific role
 _call_ai role prompt_file *metadata:
     #!/usr/bin/env bash
@@ -605,7 +640,11 @@ gitleaks:
     echo "$PROMPT" > "$PROMPT_FILE"
     echo -e "\033[0;34m🤖 Calling AI (triage role) for security analysis...\033[0m"
     echo ""
-    just _call_ai triage "$PROMPT_FILE" task=secret_triage
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        just _call_anthropic "$PROMPT_FILE"
+    else
+        just _call_ai triage "$PROMPT_FILE" task=secret_triage
+    fi
     echo ""
     echo -e "\033[0;31m❌ FAILING BUILD - Secrets must be remediated\033[0m"
     exit 1
@@ -634,7 +673,11 @@ trivy:
     echo "$PROMPT" > "$PROMPT_FILE"
     echo -e "\033[0;34m🤖 Calling AI (triage role) for vulnerability analysis...\033[0m"
     echo ""
-    just _call_ai triage "$PROMPT_FILE" task=vulnerability_triage
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        just _call_anthropic "$PROMPT_FILE"
+    else
+        just _call_ai triage "$PROMPT_FILE" task=vulnerability_triage
+    fi
 
 # ============================================
 # ROLE: CI-SUMMARIZER (Changelog Generation)

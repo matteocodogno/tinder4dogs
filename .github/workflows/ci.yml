@@ -38,8 +38,7 @@ jobs:
       - name: Run CI pipeline
         run: just ci
         env:
-          LANGFUSE_PUBLIC_KEY: ci-placeholder
-          LANGFUSE_SECRET_KEY: ci-placeholder
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
   summarize:
     runs-on: ubuntu-latest
