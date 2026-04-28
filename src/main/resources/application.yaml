@@ -1,4 +1,11 @@
 spring:
+  ai:
+    openai:
+      base-url: ${LITELLM_URL:http://localhost:4000}
+      api-key: ${LITELLM_MASTER_KEY:not-set}
+      chat:
+        options:
+          model: gpt-4o
   application:
     name: tinder-for-dogs
   datasource:
