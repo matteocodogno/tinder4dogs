@@ -1,6 +1,5 @@
 package com.ai4dev.tinderfordogs.agent.presentation
 
-import com.ai4dev.tinderfordogs.agent.model.AgentResponse
 import com.ai4dev.tinderfordogs.agent.model.ChatRequest
 import com.ai4dev.tinderfordogs.agent.service.DogMatchingAgentService
 import com.ai4dev.tinderfordogs.common.model.ErrorResponse
@@ -13,6 +12,7 @@ import io.swagger.v3.oas.annotations.tags.Tag
 import jakarta.validation.ConstraintViolationException
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
+import org.springframework.http.MediaType
 import org.springframework.web.bind.MethodArgumentNotValidException
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.PostMapping
@@ -31,19 +31,18 @@ class DogMatchingAgentController(
         summary = "Find the best dog match",
         description = "Describe the reference dog, location, and preferred date in plain text. " +
             "The agent resolves the location, searches nearby dogs, scores compatibility, " +
-            "and checks owner availability before returning its recommendation.",
+            "and checks owner availability before returning a conversational recommendation.",
     )
     @ApiResponses(
-        ApiResponse(responseCode = "200", description = "Recommendation returned"),
-        ApiResponse(
-            responseCode = "400", description = "Invalid request",
-            content = [Content(schema = Schema(implementation = ErrorResponse::class))],
-        ),
+        ApiResponse(responseCode = "200", description = "Conversational recommendation returned",
+            content = [Content(mediaType = MediaType.TEXT_PLAIN_VALUE)]),
+        ApiResponse(responseCode = "400", description = "Invalid request",
+            content = [Content(schema = Schema(implementation = ErrorResponse::class))]),
     )
-    @PostMapping("/chat")
+    @PostMapping("/chat", produces = [MediaType.TEXT_PLAIN_VALUE])
     fun chat(
         @Valid @RequestBody request: ChatRequest,
-    ): AgentResponse = service.chat(request.message)
+    ): String = service.chat(request.message)
 
     @ExceptionHandler(MethodArgumentNotValidException::class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
