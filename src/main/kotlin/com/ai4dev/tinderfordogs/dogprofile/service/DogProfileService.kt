@@ -24,6 +24,8 @@ class DogProfileService(
                 age = request.age!!,
                 gender = request.gender!!,
                 bio = request.bio,
+                latitude = request.latitude,
+                longitude = request.longitude,
             )
         val saved = repository.save(entity)
         logger.info { "Dog profile created: id=${saved.id}, name=${saved.name}" }

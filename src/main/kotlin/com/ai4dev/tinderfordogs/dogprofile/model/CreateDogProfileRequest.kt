@@ -23,4 +23,6 @@ data class CreateDogProfileRequest(
     val gender: DogGender?,
     @field:Size(max = 500)
     val bio: String? = null,
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
 )

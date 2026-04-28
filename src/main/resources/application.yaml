@@ -14,6 +14,13 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
+  ai:
+    openai:
+      base-url: ${LITELLM_URL:http://localhost:4000}
+      api-key: ${LITELLM_MASTER_KEY}
+      chat:
+        options:
+          model: gpt-4o
 
 server:
   port: 8081

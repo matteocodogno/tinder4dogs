@@ -32,6 +32,10 @@ class DogProfile(
     val gender: DogGender,
     @Column(length = 500)
     val bio: String? = null,
+    @Column(nullable = false)
+    val latitude: Double = 0.0,
+    @Column(nullable = false)
+    val longitude: Double = 0.0,
     @Column(nullable = false, updatable = false)
     var createdAt: Instant = Instant.EPOCH,
     @Column(nullable = false)
