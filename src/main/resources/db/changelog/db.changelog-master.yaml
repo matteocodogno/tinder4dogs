@@ -1,3 +1,13 @@
 databaseChangeLog:
   - include:
       file: db/changelog/migrations/001-create-dog-profiles.sql
+  - include:
+      file: db/changelog/migrations/002-create-owners.sql
+  - include:
+      file: db/changelog/migrations/003-add-owner-id-to-dog-profiles.sql
+  - include:
+      file: db/changelog/migrations/004-create-owner-availability.sql
+  - include:
+      file: db/changelog/migrations/005-seed-dogs-and-owners.sql
+  - include:
+      file: db/changelog/migrations/006-seed-milan-golden-retrievers.sql

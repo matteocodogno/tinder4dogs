@@ -20,6 +20,10 @@ spring:
       chat:
         options:
           model: gpt-4o
+    mcp:
+      server:
+        name: tinder4dogs
+        version: 1.0.0
 
 server:
   port: 8081
@@ -34,6 +38,9 @@ openai:
 tinder4dogs:
   support:
     model: support-assistant
+  search:
+    default-latitude: 45.4654
+    default-longitude: 9.1859
 
 langfuse:
   url: http://localhost:3000
