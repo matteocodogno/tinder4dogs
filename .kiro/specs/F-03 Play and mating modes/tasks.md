@@ -70,3 +70,7 @@
   - Observable completion: the full test suite is green and the steps above pass against the running service on the migrated database
   - _Boundary: DogService, MatchService, Liquibase migration_
   - _Requirements: 1.1, 1.4, 2.1, 2.2, 2.5, 4.1, 4.2_
+
+## Implementation Notes
+
+- Runtime verification environment: `docker` is absent; start the DB with `podman run` replicating `compose.yaml` (same image/env/port/volume, image as `docker.io/library/postgres:18-alpine`) — and never `pkill -f tinder4dogs`: that pattern also matches the rootless podman container `tinder4dogs-db` and kills the database. Restarting a stopped container can lose the host port mapping; recreate it with `podman rm -f` + `podman run` (the named volume keeps the migrated schema).
