@@ -30,3 +30,11 @@ run = "docker compose down"
 [tasks.format]
 description = "Format Kotlin sources"
 run = "mvn -q spotless:apply"
+
+[tasks.coverage]
+description = "Run the tests and write the JaCoCo report to target/site/jacoco/index.html"
+run = "mvn clean test jacoco:report"
+
+[tasks.mutation]
+description = "Run the mutation analysis and write the report to target/pit-reports/index.html"
+run = "mvn test-compile org.pitest:pitest-maven:mutationCoverage"
