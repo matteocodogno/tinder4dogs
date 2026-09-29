@@ -85,6 +85,16 @@
             <version>${jqwik.version}</version>
             <scope>test</scope>
         </dependency>
+        <!--
+            Spring Boot 4 moved test auto-configuration into per-technology
+            modules: @WebMvcTest ships in spring-boot-webmvc-test, and the
+            classic spring-boot-starter-test does not carry it.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

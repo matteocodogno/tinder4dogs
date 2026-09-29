@@ -3,6 +3,8 @@ package com.ai4dev.tinder4dogs.dog
 import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
 import jakarta.persistence.ElementCollection
+import jakarta.persistence.Embeddable
+import jakarta.persistence.Embedded
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
 import jakarta.persistence.Enumerated
@@ -17,6 +19,20 @@ enum class Gender {
     MALE,
     FEMALE,
 }
+
+/**
+ * A coordinate pair, present or absent as one unit. Value equality only: no
+ * domain logic here, and no range validation either -- coordinate ranges are
+ * a rule of the request boundary, not of the stored value.
+ */
+@Embeddable
+data class Location(
+    @Column(name = "latitude")
+    val latitude: Double,
+
+    @Column(name = "longitude")
+    val longitude: Double,
+)
 
 @Entity
 @Table(name = "dog")
@@ -45,4 +61,7 @@ class Dog(
     )
     @Column(name = "preference", nullable = false)
     var preferences: MutableSet<String> = mutableSetOf(),
+
+    @Embedded
+    var location: Location? = null,
 )

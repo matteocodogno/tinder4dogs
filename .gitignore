@@ -16,3 +16,6 @@ target/
 ### local ###
 *.log
 .env.local
+
+# jqwik test artifact
+.jqwik-database
