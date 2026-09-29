@@ -1,7 +1,7 @@
 # Implementation Plan — F-03: Play and Mating Modes
 
 - [ ] 1. Foundation: mode storage on the dog profile
-- [ ] 1.1 Persist active modes and mating details in the schema
+- [x] 1.1 Persist active modes and mating details in the schema
   - One new append-only migration file with three changesets: a mode child table mirroring the preference table, a seed that makes every existing dog play-only, and three nullable self-declared mating detail columns on the dog table
   - Register the file in the master changelog index by appending one include; never edit existing entries; every changeset carries a comment and an explicit rollback
   - Observable completion: with the database up, the application starts with schema validation green, every pre-existing dog (including the legacy bad row) has a PLAY row, and the dog table carries the three new nullable columns
