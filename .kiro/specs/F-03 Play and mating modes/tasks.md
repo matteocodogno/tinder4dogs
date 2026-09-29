@@ -8,7 +8,7 @@
   - _Boundary: Liquibase migration_
   - _Requirements: 1.1_
 
-- [ ] 1.2 Model modes and mating details on the dog profile
+- [x] 1.2 Model modes and mating details on the dog profile
   - Introduce the Mode concept — play and mating — beside gender, a set of active modes stored the same way preferences are, and the three nullable mating detail fields on the profile
   - Expose a repository query for the dogs active in a given mode
   - Observable completion: the application still starts with schema validation green and the existing endpoints behave unchanged, while the profile carries modes and mating details and mode membership is queryable

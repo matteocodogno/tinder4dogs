@@ -18,6 +18,12 @@ enum class Gender {
     FEMALE,
 }
 
+/** What a dog is on the app for. A dog has at least one mode active. */
+enum class Mode {
+    PLAY,
+    MATING,
+}
+
 @Entity
 @Table(name = "dog")
 class Dog(
@@ -45,4 +51,23 @@ class Dog(
     )
     @Column(name = "preference", nullable = false)
     var preferences: MutableSet<String> = mutableSetOf(),
+
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(
+        name = "dog_mode",
+        joinColumns = [JoinColumn(name = "dog_id")],
+    )
+    @Enumerated(EnumType.STRING)
+    @Column(name = "mode", nullable = false)
+    var modes: MutableSet<Mode> = mutableSetOf(),
+
+    /** Self-declared, and only required once mating mode is activated. */
+    @Column(name = "pedigree")
+    var pedigree: String? = null,
+
+    @Column(name = "neutered")
+    var neutered: Boolean? = null,
+
+    @Column(name = "health_status")
+    var healthStatus: String? = null,
 )
