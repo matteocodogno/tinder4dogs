@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env.local
+*.local
+
+# Vite writes this while loading vite.config.ts and normally removes it again.
+vite.config.ts.timestamp-*.mjs

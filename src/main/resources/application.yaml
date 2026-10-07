@@ -19,9 +19,41 @@ spring:
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
 
+  ai:
+    openai:
+      # The course gateway is OpenAI-compatible. Spring AI appends the
+      # /v1/chat/completions path itself, so this value must NOT end in /v1.
+      base-url: ${AI4DEV_GATEWAY_BASE_URL:https://aiproxy.ai4dev.dev}
+      # A literal "unset" rather than an empty value, so that a fresh clone
+      # starts and /api/ai/health answers with a readable reason, instead of the
+      # application context failing to refresh before anybody has a key.
+      api-key: ${AI4DEV_API_KEY:unset}
+      chat:
+        # Spring AI 2.0 removed the artificial `.options.` segment. In every 1.x
+        # example this property is spring.ai.openai.chat.options.model.
+        model: ${AI4DEV_MODEL:cheap}
+        temperature: 0.2
+
+  # Google sign-in is configured ENTIRELY from the environment. Nothing is
+  # committed here, which is the rule this repository has followed since Module
+  # 1, and with no variables set there is no client registration: the
+  # application starts anyway and every request is the local developer.
+  #
+  #   SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_ID=...
+  #   SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_SECRET=...
+  #
+  # Spring Boot supplies Google's endpoints from its common-provider defaults,
+  # so the id and the secret are all that is needed.
+
 server:
   port: 8080
 
 logging:
   level:
     com.ai4dev.tinder4dogs: INFO
+
+# Where the single-page application lives. Used for the CORS policy and for the
+# redirect that sends the browser back after sign-in.
+app:
+  spa:
+    origin: ${SPA_ORIGIN:http://localhost:5173}
