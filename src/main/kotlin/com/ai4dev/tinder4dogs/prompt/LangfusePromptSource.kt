@@ -38,7 +38,6 @@ import org.springframework.web.client.RestClient
 class LangfusePromptSource(
     private val fallback: PromptSource,
     private val restClient: RestClient,
-    private val objectMapper: ObjectMapper,
     publicKey: String,
     secretKey: String,
     private val cacheTtlMillis: Long,
@@ -46,6 +45,20 @@ class LangfusePromptSource(
 
     private val log = LoggerFactory.getLogger(javaClass)
     private val cache = ConcurrentHashMap<String, CacheEntry>()
+
+    /**
+     * Its own mapper, deliberately, rather than the application's.
+     *
+     * Spring Boot 4 does not publish a Jackson 2 ObjectMapper bean here: Spring
+     * AI 2.0 brought Jackson 3 along, and that is what Boot wires for HTTP. The
+     * class is still on the classpath so this compiles either way, which is
+     * exactly the kind of difference that passes review and fails at startup.
+     *
+     * Asking for the application's mapper was wrong anyway. This class reads
+     * three fields from one endpoint and has no business inheriting whatever
+     * serialisation configuration the product's API happens to use.
+     */
+    private val json = ObjectMapper()
 
     private val authorization: String = "Basic " + Base64.getEncoder()
         .encodeToString((publicKey + ":" + secretKey).toByteArray(StandardCharsets.UTF_8))
@@ -98,7 +111,7 @@ class LangfusePromptSource(
      * the format is built around.
      */
     private fun parse(body: String): LoadedPrompt? {
-        val root: JsonNode = objectMapper.readTree(body)
+        val root: JsonNode = json.readTree(body)
         val version = root.path("version").asText("unknown")
         val prompt = root.path("prompt")
 

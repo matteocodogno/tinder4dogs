@@ -1,6 +1,5 @@
 package com.ai4dev.tinder4dogs.prompt
 
-import com.fasterxml.jackson.databind.ObjectMapper
 import java.time.Duration
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -28,7 +27,6 @@ class PromptConfiguration {
     @Bean
     fun promptSource(
         resources: ResourceLoader,
-        objectMapper: ObjectMapper,
         @Value("\${app.langfuse.host:}") host: String,
         @Value("\${app.langfuse.public-key:}") publicKey: String,
         @Value("\${app.langfuse.secret-key:}") secretKey: String,
@@ -53,7 +51,6 @@ class PromptConfiguration {
         return LangfusePromptSource(
             fallback = classpath,
             restClient = RestClient.builder().baseUrl(host).requestFactory(requestFactory).build(),
-            objectMapper = objectMapper,
             publicKey = publicKey,
             secretKey = secretKey,
             cacheTtlMillis = cacheTtlSeconds * 1000,
