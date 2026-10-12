@@ -57,3 +57,20 @@ logging:
 app:
   spa:
     origin: ${SPA_ORIGIN:http://localhost:5173}
+
+  prompts:
+    # Which deployed version to serve. In Langfuse a version is deployed by
+    # moving this label onto it, and rolled back by moving it back.
+    label: ${LANGFUSE_PROMPT_LABEL:production}
+    # How long a fetched prompt is trusted before it is refreshed. The official
+    # Langfuse SDKs default to 60 seconds; on the JVM there is no SDK, so this is
+    # a number somebody chose rather than inherited.
+    cache-ttl-seconds: ${LANGFUSE_PROMPT_CACHE_TTL:60}
+
+  # Leave these unset and prompts come from the jar, which is what a fresh clone
+  # does before anybody has created a Langfuse project. Nothing is committed
+  # here, the same rule the gateway and Google sign-in already follow.
+  langfuse:
+    host: ${LANGFUSE_HOST:}
+    public-key: ${LANGFUSE_PUBLIC_KEY:}
+    secret-key: ${LANGFUSE_SECRET_KEY:}

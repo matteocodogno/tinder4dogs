@@ -8,8 +8,9 @@ import com.ai4dev.tinder4dogs.dog.Temperament
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.client.ChatClient
 import org.springframework.beans.factory.ObjectProvider
+import com.ai4dev.tinder4dogs.prompt.PromptSource
+import java.util.concurrent.atomic.AtomicReference
 import org.springframework.beans.factory.annotation.Value
-import org.springframework.core.io.Resource
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
@@ -38,10 +39,22 @@ class ProfileChatService(
     private val dogs: DogRepository,
     private val conversations: ProfileChatConversations,
     private val chatClients: ObjectProvider<ChatClient.Builder>,
-    @Value("classpath:/prompts/profile-chat.system.md") private val systemPrompt: Resource,
+    private val prompts: PromptSource,
+    @Value("\${app.prompts.label:production}") private val promptLabel: String,
 ) {
 
     private val log = LoggerFactory.getLogger(javaClass)
+
+    /**
+     * The last prompt version this service used.
+     *
+     * Langfuse links a trace to the prompt version that produced it for its
+     * Python and TypeScript SDKs, and documents no way to do it from Java. So
+     * the link is made here, by hand, in the only place that knows both: a line
+     * in the log every time the deployed version changes under a running
+     * process. Two lines of code that nobody writes until the first incident.
+     */
+    private val lastPromptVersion = AtomicReference<String>()
 
     /** Null when no model is configured, so the caller can say so precisely. */
     fun isAvailable(): Boolean = chatClients.ifAvailable != null
@@ -61,10 +74,18 @@ class ProfileChatService(
         // null answer has to be handled anyway. Written as two statements rather
         // than one, because a try/catch expression followed by an elvis operator
         // is the kind of line that reads fine and parses badly.
+        val prompt = prompts.load(PROMPT_NAME, promptLabel)
+        if (lastPromptVersion.getAndSet(prompt.version) != prompt.version) {
+            log.info(
+                "the profile chat is now using prompt {} version {}, from {}",
+                PROMPT_NAME, prompt.version, prompt.origin,
+            )
+        }
+
         val draft: DogProfileDraft? = try {
             builder.build()
                 .prompt()
-                .system(systemPrompt)
+                .system(prompt.text)
                 .user(withHistory(conversations.history(ownerSubject), input))
                 .call()
                 .entity(DogProfileDraft::class.java)
@@ -171,6 +192,7 @@ class ProfileChatService(
             ?.takeIf { it.isNotEmpty() }
 
     private companion object {
+        const val PROMPT_NAME = "profile-chat"
         const val MAX_INPUT_CHARACTERS = 4000
         const val MAX_REPLY_CHARACTERS = 500
         const val MAX_NAME_CHARACTERS = 100
