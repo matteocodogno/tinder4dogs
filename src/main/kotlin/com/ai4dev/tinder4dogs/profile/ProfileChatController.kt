@@ -2,35 +2,53 @@ package com.ai4dev.tinder4dogs.profile
 
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.security.core.annotation.AuthenticationPrincipal
+import org.springframework.security.oauth2.core.oidc.user.OidcUser
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
 
 data class ChatRequest(val message: String)
 
+data class ChatReplyResponse(
+    val reply: String,
+    val profile: ProfileResponse?,
+)
+
 /**
- * The feature this module is about, and it is not implemented here on purpose.
+ * The owner describes their dog in free text and the profile fills itself in.
  *
- * The endpoint exists, the single-page application already calls it, and it
- * answers 501. That is the hole the room fills: a system prompt, a typed
- * extraction, and the code-side validation that survives the prompt being
- * talked out of its instructions.
- *
- * Leave the 501. A participant who finds a working implementation here has been
- * given the answer to the exercise.
+ * The controller is thin on purpose: it resolves who is asking, hands the
+ * sentence to [ProfileChatService], and shapes the answer. Everything that
+ * decides what is true about the dog lives in the service, next to the
+ * validation that makes those decisions safe.
  */
 @RestController
-class ProfileChatController {
+class ProfileChatController(
+    private val chat: ProfileChatService,
+) {
 
     @PostMapping("/api/profile/chat")
-    fun chat(@RequestBody request: ChatRequest): ResponseEntity<Map<String, Any?>> =
-        ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).body(
-            mapOf(
-                "error" to "not_implemented",
-                "detail" to "The profile chat is the feature you are about to build. " +
-                    "It needs a system prompt, a typed result and validation that does not " +
-                    "depend on the model behaving.",
-                "receivedCharacters" to request.message.length,
-            ),
+    fun chat(
+        @AuthenticationPrincipal principal: OidcUser?,
+        @RequestBody request: ChatRequest,
+    ): ResponseEntity<ChatReplyResponse> {
+        val outcome = chat.complete(
+            ownerSubject = CurrentOwner.subjectOf(principal),
+            ownerFallbackName = CurrentOwner.displayNameOf(principal),
+            message = request.message,
         )
+        val body = ChatReplyResponse(
+            reply = outcome.reply,
+            profile = outcome.dog?.let(ProfileResponse::of),
+        )
+
+        // One status code carries real information: a laptop with no gateway
+        // configuration is a setup problem, not a conversation that went badly,
+        // and the interface should not present it as the model's answer.
+        if (!chat.isAvailable()) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(body)
+        }
+        return ResponseEntity.ok(body)
+    }
 }
