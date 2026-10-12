@@ -15,4 +15,10 @@ target/
 
 ### local ###
 *.log
+.env
 .env.local
+# mise's local override file. It is where the Langfuse and gateway credentials
+# belong on a developer's machine, which is exactly why it must never be
+# committed. mise merges it automatically on top of .mise.toml.
+.mise.local.toml
+.mise.*.local.toml
