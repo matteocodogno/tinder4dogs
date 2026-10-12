@@ -36,6 +36,7 @@ data class ChatOutcome(
 @Service
 class ProfileChatService(
     private val dogs: DogRepository,
+    private val conversations: ProfileChatConversations,
     private val chatClients: ObjectProvider<ChatClient.Builder>,
     @Value("classpath:/prompts/profile-chat.system.md") private val systemPrompt: Resource,
 ) {
@@ -53,8 +54,8 @@ class ProfileChatService(
         // A cap before the call, not after. The owner's message is the one input
         // a stranger controls, and an uncapped one is a bill rather than a
         // profile. Truncating keeps the chat working; refusing would not.
-        val input = message.trim().take(MAX_INPUT_CHARACTERS)
-        if (input.isEmpty()) return ChatOutcome("Tell me about your dog and I will fill the profile in.", null)
+        val input = sanitise(message).take(MAX_INPUT_CHARACTERS)
+        if (input.isEmpty()) return ChatOutcome(EMPTY_REPLY, null)
 
         // Declared nullable deliberately: entity() is annotated nullable, and a
         // null answer has to be handled anyway. Written as two statements rather
@@ -64,7 +65,7 @@ class ProfileChatService(
             builder.build()
                 .prompt()
                 .system(systemPrompt)
-                .user(input)
+                .user(withHistory(conversations.history(ownerSubject), input))
                 .call()
                 .entity(DogProfileDraft::class.java)
         } catch (failure: Exception) {
@@ -77,6 +78,7 @@ class ProfileChatService(
         if (draft == null) return ChatOutcome(UNREADABLE_REPLY, null)
 
         val reply = text(draft.reply, MAX_REPLY_CHARACTERS) ?: DEFAULT_REPLY
+        conversations.record(ownerSubject, input, reply)
 
         // The model's own out-of-scope flag is believed only in the direction
         // that costs nothing: it can refuse to fill the profile, it cannot ask
@@ -112,6 +114,41 @@ class ProfileChatService(
         return changed
     }
 
+    /**
+     * Everything the model is told, in one string: what has already been said,
+     * then the new message, clearly separated.
+     *
+     * Without this the feature loops, and the loop is not the model being bad.
+     * One word arrives with no question attached, so "maschietto" is not an
+     * answer about gender, it is the entire input, and the only sensible thing
+     * to do with it is ask something else.
+     *
+     * Note what replaying the transcript does NOT do: it gives those earlier
+     * messages no more authority than they had the first time. They were
+     * untrusted text in the same single channel then and they are untrusted text
+     * in the same single channel now, which is the honest reason this costs
+     * nothing in risk and quite a lot in tokens.
+     */
+    private fun withHistory(history: List<ChatTurn>, message: String): String {
+        if (history.isEmpty()) return message
+        val transcript = history.joinToString("\n") { turn ->
+            "owner: " + turn.owner + "\nyou: " + turn.assistant
+        }
+        return "CONVERSATION SO FAR\n" + transcript + "\n\nTHE OWNER'S NEW MESSAGE\n" + message
+    }
+
+    /**
+     * Curly braces out, before anything else happens to the message.
+     *
+     * Prompt text is rendered by StringTemplate, whose delimiters are single
+     * braces. An owner who pastes one gets a render failure instead of an
+     * answer, for a character they did not type on purpose. This is the same
+     * sharp edge that makes a JSON example unsafe to paste into a system prompt,
+     * arriving from the other direction.
+     */
+    private fun sanitise(message: String): String =
+        message.replace('{', ' ').replace('}', ' ').trim()
+
     private fun text(raw: String?, max: Int): String? =
         raw?.trim()?.takeIf { it.isNotEmpty() }?.take(max)
 
@@ -142,6 +179,7 @@ class ProfileChatService(
         const val MIN_AGE = 0
         const val MAX_AGE = 30
 
+        const val EMPTY_REPLY = "Tell me about your dog and I will fill the profile in."
         const val DEFAULT_REPLY = "I have updated the profile with what you told me."
         const val UNREADABLE_REPLY =
             "I could not read that properly. Could you tell me about your dog in one or two sentences?"
