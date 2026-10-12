@@ -9,8 +9,7 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.annotation.web.invoke
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository
 import org.springframework.security.web.SecurityFilterChain
-import org.springframework.security.web.csrf.CookieCsrfTokenRepository
-import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler
+import org.springframework.security.web.csrf.CsrfFilter
 import org.springframework.web.cors.CorsConfiguration
 import org.springframework.web.cors.CorsConfigurationSource
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource
@@ -57,23 +56,24 @@ class SecurityConfig(
     ): SecurityFilterChain {
         val googleIsConfigured = clientRegistrations.ifAvailable != null
 
+        // Spring Security 7's purpose-built preset for a single-page application:
+        // a cookie-based repository, plus a request handler that resolves the
+        // plain token value rather than the BREACH-encoded one, which is what a
+        // browser application actually has.
+        //
+        // Called through the Java configurer rather than the Kotlin DSL on
+        // purpose. The reference manual prints `csrf { spa() }` in Kotlin, the
+        // CsrfDsl API index does not list the function, and the two cannot both
+        // be right. CsrfConfigurer.spa() is documented since 7.0, so this goes
+        // through the method that is certain to be there.
+        http.csrf { csrf -> csrf.spa() }
+
+        // And the cookie has to exist before the first unsafe request, not after
+        // it has been refused once. See CsrfCookieFilter.
+        http.addFilterAfter(CsrfCookieFilter(), CsrfFilter::class.java)
+
         http {
             cors { }
-            csrf {
-                // A cookie the browser application can read, and the plain
-                // request handler. The BREACH-protecting Xor handler expects
-                // the ENCODED token back, and a browser application only ever
-                // has the plain value, which is the one mistake this pairing
-                // exists to avoid.
-                //
-                // Spring Security 7 bundles the correct pair behind
-                // `csrf { spa() }`. Prefer that if it resolves on your version:
-                // the reference documents it in Kotlin, but the CsrfDsl API
-                // index does not list the function, so this file uses the two
-                // properties both sources agree on.
-                csrfTokenRepository = CookieCsrfTokenRepository.withHttpOnlyFalse()
-                csrfTokenRequestHandler = CsrfTokenRequestAttributeHandler()
-            }
             authorizeHttpRequests {
                 authorize("/", permitAll)
                 authorize("/error", permitAll)
