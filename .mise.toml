@@ -6,6 +6,55 @@
 [tools]
 java = "temurin-25"
 maven = "3.9.11"
+# Needed since the product grew a web interface in web/. Pinned here so that
+# `mise run fe` works on a clean clone instead of depending on whatever node
+# happens to be on the laptop.
+node = "22"
+
+# ─── the database ───────────────────────────────────────────────────────────
+
+[tasks.db]
+description = "Start the application's own PostgreSQL"
+run = "docker compose up -d"
+
+[tasks."db:stop"]
+description = "Stop the database and KEEP its data"
+run = "docker compose down"
+
+[tasks."db:new"]
+description = "Throw the database away and start an empty one (destroys all data)"
+# This task exists because of a real failure, and it is worth knowing why.
+#
+# `ai4dev module N start` resets the CODE and cannot reset the DATABASE: the
+# compose volume outlives every branch. Anything a lab did to the schema is
+# still there weeks later, and `db:stop` above is `docker compose down` WITHOUT
+# -v, so nothing in this toolchain ever removed it. A module baseline then met a
+# column it had never created and refused to start.
+#
+# This is the command that gives a module the clean database it assumes.
+run = ["docker compose down -v", "docker compose up -d"]
+
+# ─── running it ─────────────────────────────────────────────────────────────
+
+[tasks.be]
+description = "Start the backend (needs the database: mise run db)"
+run = "mvn -q spring-boot:run"
+
+[tasks.fe]
+description = "Start the web interface on :5173 (expects the backend on :8080)"
+# Installs dependencies the first time and only the first time, so that a fresh
+# clone does not fail with an error that names vite instead of the thing that is
+# actually missing.
+run = "cd web && { [ -d node_modules ] || npm ci; } && npm run dev"
+
+[tasks.run]
+description = "Start the backend and the web interface together"
+# mise runs dependencies in parallel, which is what two long-running servers
+# need. The database is NOT a dependency on purpose: it would race the backend
+# for the port it is about to connect to. Start it once with `mise run db`.
+depends = ["be", "fe"]
+
+# ─── building and checking ──────────────────────────────────────────────────
 
 [tasks.build]
 description = "Compile and package the application"
@@ -14,18 +63,6 @@ run = "mvn -q clean package"
 [tasks.test]
 description = "Run the test suite"
 run = "mvn -q test"
-
-[tasks.run]
-description = "Start the application (needs the database: mise run db)"
-run = "mvn -q spring-boot:run"
-
-[tasks.db]
-description = "Start the application's own PostgreSQL"
-run = "docker compose up -d"
-
-[tasks."db:stop"]
-description = "Stop the database"
-run = "docker compose down"
 
 [tasks.format]
 description = "Format Kotlin sources"
