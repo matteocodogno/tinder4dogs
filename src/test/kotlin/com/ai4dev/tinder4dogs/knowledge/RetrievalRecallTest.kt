@@ -1,6 +1,5 @@
 package com.ai4dev.tinder4dogs.knowledge
 
-import com.fasterxml.jackson.databind.ObjectMapper
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
@@ -8,7 +7,6 @@ import org.springframework.ai.vectorstore.SearchRequest
 import org.springframework.ai.vectorstore.VectorStore
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.core.io.ClassPathResource
 
 /**
  * Measures the search, with no language model in the loop.
@@ -61,10 +59,8 @@ class RetrievalRecallTest {
     @Autowired
     private lateinit var vectorStore: VectorStore
 
-    private data class Question(val id: String, val question: String, val expectedSource: String)
-
     private data class Outcome(
-        val question: Question,
+        val question: RetrievalSet.Question,
         val retrieved: List<String>,
     ) {
         val hitAt3: Boolean get() = question.expectedSource in retrieved
@@ -74,7 +70,7 @@ class RetrievalRecallTest {
     @Test
     fun `the search finds the document that answers the question`() {
         val stats = index.build()
-        val questions = loadQuestions()
+        val questions = RetrievalSet.load()
 
         val outcomes = questions.map { q ->
             val hits = vectorStore.similaritySearch(
@@ -142,20 +138,7 @@ class RetrievalRecallTest {
 
     private fun percent(value: Double): String = "%.0f%%".format(value * 100)
 
-    private fun loadQuestions(): List<Question> {
-        val mapper = ObjectMapper()
-        val root = ClassPathResource(QUESTION_SET).inputStream.use { mapper.readTree(it) }
-        return root["questions"].map { node ->
-            Question(
-                id = node["id"].asText(),
-                question = node["question"].asText(),
-                expectedSource = node["expectedSource"].asText(),
-            )
-        }
-    }
-
     private companion object {
         const val TOP_K = 3
-        const val QUESTION_SET = "retrieval/retrieval-set.json"
     }
 }
