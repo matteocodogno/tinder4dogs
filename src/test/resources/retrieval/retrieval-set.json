@@ -1,0 +1,105 @@
+{
+  "description": "Set di valutazione del retrieval. Per ogni domanda, il documento di knowledge/ che la risponde, identificato dal campo 'source' del suo frontmatter. Contiene SOLO domande a cui il corpus risponde: una domanda senza risposta non misura il recall, misura il rifiuto, ed e' un'altra prova.",
+  "questions": [
+    {
+      "id": "q01",
+      "question": "Come faccio a creare un account?",
+      "expectedSource": "faq-generale"
+    },
+    {
+      "id": "q02",
+      "question": "Posso cambiare la mail con cui mi sono iscritto?",
+      "expectedSource": "faq-generale"
+    },
+    {
+      "id": "q03",
+      "question": "Voglio cancellare il mio account, come si fa?",
+      "expectedSource": "faq-generale"
+    },
+    {
+      "id": "q04",
+      "question": "Come cancello il mio cane?",
+      "expectedSource": "faq-profilo"
+    },
+    {
+      "id": "q05",
+      "question": "Quali informazioni devo inserire sul mio cane?",
+      "expectedSource": "faq-profilo"
+    },
+    {
+      "id": "q06",
+      "question": "Posso modificare la razza dopo aver salvato il profilo?",
+      "expectedSource": "faq-profilo"
+    },
+    {
+      "id": "q07",
+      "question": "Il mio cane non viene mai visto da nessuno",
+      "expectedSource": "guida-visibilita-ricerca"
+    },
+    {
+      "id": "q08",
+      "question": "Perche' il mio profilo non compare nei risultati di ricerca?",
+      "expectedSource": "guida-visibilita-ricerca"
+    },
+    {
+      "id": "q09",
+      "question": "Ho completato il profilo ma non appaio ancora, cosa devo fare?",
+      "expectedSource": "guida-visibilita-ricerca"
+    },
+    {
+      "id": "q10",
+      "question": "Con quali filtri posso cercare un cane?",
+      "expectedSource": "guida-match-e-ricerca"
+    },
+    {
+      "id": "q11",
+      "question": "Perche' i risultati sono sempre in ordine diverso?",
+      "expectedSource": "guida-match-e-ricerca"
+    },
+    {
+      "id": "q12",
+      "question": "Posso filtrare per taglia?",
+      "expectedSource": "guida-match-e-ricerca"
+    },
+    {
+      "id": "q13",
+      "question": "Quanto costa l'abbonamento premium?",
+      "expectedSource": "faq-abbonamento"
+    },
+    {
+      "id": "q14",
+      "question": "Cosa include il premium?",
+      "expectedSource": "faq-abbonamento"
+    },
+    {
+      "id": "q15",
+      "question": "Come disdico il premium?",
+      "expectedSource": "faq-abbonamento"
+    },
+    {
+      "id": "q16",
+      "question": "Non mi arrivano le notifiche push",
+      "expectedSource": "wiki-export-notifiche"
+    },
+    {
+      "id": "q17",
+      "question": "Quando vengono inviate le notifiche di un nuovo match?",
+      "expectedSource": "wiki-export-notifiche"
+    },
+    {
+      "id": "q18",
+      "question": "Cosa e' cambiato nell'ultima release?",
+      "expectedSource": "release-notes-2026-Q3"
+    },
+    {
+      "id": "q19",
+      "question": "Il badge Cane del Mese esiste ancora?",
+      "expectedSource": "release-notes-2026-Q3"
+    },
+    {
+      "id": "q20",
+      "question": "Dove trovo assistenza se ho un problema?",
+      "expectedSource": "faq-generale"
+    }
+  ]
+}

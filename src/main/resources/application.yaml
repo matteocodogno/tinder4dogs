@@ -33,6 +33,16 @@ spring:
         # example this property is spring.ai.openai.chat.options.model.
         model: ${AI4DEV_MODEL:cheap}
         temperature: 0.2
+      embedding:
+        # Configured and unused, exactly as the chat model was before Module 12.
+        #
+        # Two things about this one line are worth knowing before Module 13's
+        # first lab. The `.options.` segment is gone here too, as it is for
+        # chat. And the default, if you delete this property, is
+        # text-embedding-ada-002: a 2022 model that produces 1536 dimensions
+        # just like the one you meant to use, so the index builds, the search
+        # works, and nothing anywhere says you are using the wrong model.
+        model: ${AI4DEV_EMBEDDING_MODEL:embed}
 
   # Google sign-in is configured ENTIRELY from the environment. Nothing is
   # committed here, which is the rule this repository has followed since Module

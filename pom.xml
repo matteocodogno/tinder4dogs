@@ -83,6 +83,18 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-openai</artifactId>
         </dependency>
+
+        <!--
+            The VectorStore API and SimpleVectorStore. Declared explicitly even
+            though a starter may already bring it transitively: Module 13 writes
+            code against this module from its first lab, and a dependency the
+            labs rely on should be visible in the file rather than inherited by
+            luck. `mvn dependency:tree` says which of the two it is.
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-vector-store</artifactId>
+        </dependency>
         <!--
             Spring Boot 4 moved auto-configuration out of spring-boot-autoconfigure
             into per-technology modules. liquibase-core on its own gives you the
