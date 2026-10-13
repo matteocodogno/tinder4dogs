@@ -30,11 +30,17 @@ import org.springframework.boot.test.context.SpringBootTest
  * **It is not a unit test yet, whatever the comment above claims.** It needs
  * the gateway, a key, and a database to start the context, so it costs real
  * embedding calls on every run and it cannot go into a pipeline as it stands.
- * The fix is known and is deliberately not here: `SimpleVectorStore` has
- * `save(File)` and `load(File)`, so an index built once and committed as a
- * fixture would make this hermetic and free. That is a conversation about
+ * The fix is known and is deliberately not here: an index built once and reused
+ * as a fixture would make this hermetic and free. That is a conversation about
  * caching, and caching an index is also the thing that would hide the index
  * build's cost from the room's dashboard this afternoon.
+ *
+ * Only this paragraph changed when the store moved into the database, and only
+ * because it used to name the toy store's `save(File)` as the way to cache the
+ * fixture. That option is gone; a seeded database is what replaces it. Nothing
+ * executable in this file was touched, which is the claim the lab makes: the
+ * measurement survived a change of storage because it was written against the
+ * `VectorStore` interface and the twenty questions, and not against either.
  *
  * **Nothing here asserts a recall level**, because nobody has run it on this
  * corpus. Asserting a number somebody guessed is worse than asserting none:

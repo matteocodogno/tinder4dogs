@@ -5,7 +5,25 @@
 
 services:
   postgres:
-    image: postgres:18-alpine
+    # pgvector, and from Module 13 this is a product decision rather than a
+    # convenience. The knowledge index the support bot answers from lives in a
+    # `vector` column in THIS database, created by THIS repository's migration
+    # 006, and `vector` is not in a stock PostgreSQL. A plain postgres image
+    # cannot run the migrations any more.
+    #
+    # `pg18-trixie` keeps the major version the product already ran on, so
+    # nothing else in this file changes. Debian trixie rather than alpine
+    # because Debian is what pgvector publishes.
+    #
+    # THE OLD VOLUME CANNOT BE REUSED, and not because of the extension: the
+    # data directory below was initialised by an alpine build of PostgreSQL 18
+    # (musl) and this image is a Debian build (glibc). A data directory is not
+    # guaranteed to be portable between them — collation version mismatches on
+    # text indexes are the usual symptom, and they are the kind that corrupts
+    # quietly rather than failing loudly. Throw it away and re-index:
+    #
+    #     ai4dev db new        (or: mise run db:new)
+    image: pgvector/pgvector:pg18-trixie
     container_name: tinder4dogs-db
     environment:
       POSTGRES_DB: tinder4dogs

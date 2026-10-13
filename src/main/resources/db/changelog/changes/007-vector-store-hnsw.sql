@@ -1,0 +1,55 @@
+--liquibase formatted sql
+
+--changeset tinder4dogs:007-vector-store-hnsw
+--comment: the ANN index: faster queries, and less accurate ones
+--
+-- This changeset makes the search approximate. That is not a side effect, it is
+-- what the index is for, and pgvector says so in its own README: approximate
+-- nearest neighbour search "trades some recall for speed" and results can
+-- change once the index exists.
+--
+-- Which is why this is a separate changeset from 006 and why it arrives after a
+-- recall number exists. Run the harness without this index and with it, at two
+-- values of `hnsw.ef_search`, and the trade becomes three rows in a table
+-- instead of a belief. On a corpus of fourteen documents the difference may be
+-- zero: that is a finding about the corpus, not a licence to assume the index
+-- is free at a hundred thousand chunks.
+--
+-- HNSW rather than IVFFlat: it needs no training step, so it can be created on
+-- an empty table, which is the only kind of table a migration can count on. Its
+-- build parameters are written out rather than defaulted, because from here on
+-- they are part of the schema and a schema should say what it is:
+--
+--   m = 16                 connections per layer (pgvector's default)
+--   ef_construction = 64   candidate list size while building (pgvector's default)
+--
+-- One word in that paragraph sits where it does because of the parser, and it
+-- is worth knowing why. In a formatted-SQL changelog a comment line that BEGINS
+-- with a reserved word is read as a directive, and the reserved words are the
+-- ones already used above plus a few more. A paragraph of prose that happens to
+-- wrap so that one of them lands first after the dashes fails the changelog
+-- parse at startup, before a single statement runs, with an "Unexpected
+-- formatting" error naming a line number and not the word. The fix is to reflow
+-- the sentence. The lesson is that in this file format prose and syntax share a
+-- namespace, and this very paragraph had to be rewritten twice to say so.
+--
+-- `vector_cosine_ops` must match `spring.ai.vectorstore.pgvector.distance-type`
+-- (COSINE_DISTANCE, the `<=>` operator). An operator class that does not match
+-- the query's operator leaves an index PostgreSQL will never use and a search
+-- that is quietly back to a full scan, with no error anywhere.
+--
+-- What is NOT here: `hnsw.ef_search`. That is a query-time setting, it defaults
+-- to 40, and raising it buys recall back at the cost of latency. It belongs to
+-- the session asking the question rather than to the schema, which is why the
+-- measurement sets it with SET LOCAL inside a transaction.
+--
+-- To go back and measure the exact row again, drop the index by hand:
+--
+--     DROP INDEX ix_vector_store_embedding_hnsw;
+--
+-- The changeset is already recorded by then, so it will not be applied again:
+-- run the CREATE INDEX below by hand, or `ai4dev db new` and re-index.
+CREATE INDEX IF NOT EXISTS ix_vector_store_embedding_hnsw
+    ON vector_store USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+--rollback DROP INDEX IF EXISTS ix_vector_store_embedding_hnsw;

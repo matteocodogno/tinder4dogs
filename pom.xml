@@ -95,6 +95,21 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-vector-store</artifactId>
         </dependency>
+
+        <!--
+            Where the vectors actually live, from Module 13's third lab onwards:
+            the PostgreSQL this product already runs, through the pgvector
+            extension. The starter brings the store, its auto-configuration and
+            spring-boot-starter-jdbc, and it declares a `VectorStore` bean
+            @ConditionalOnMissingBean — which is why the hand-written
+            SimpleVectorStore bean this module started with had to be DELETED
+            rather than left alone: it would have won, silently, and every
+            measurement after the swap would have been of the toy store.
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
+        </dependency>
         <!--
             Spring Boot 4 moved auto-configuration out of spring-boot-autoconfigure
             into per-technology modules. liquibase-core on its own gives you the

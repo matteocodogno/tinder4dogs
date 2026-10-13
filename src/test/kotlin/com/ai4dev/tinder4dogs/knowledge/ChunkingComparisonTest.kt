@@ -49,7 +49,10 @@ import org.springframework.boot.test.context.SpringBootTest
  * Cost and duration: three builds plus sixty query embeddings. On this corpus
  * that is a few hundred calls of a few hundred tokens, which is fractions of a
  * cent and a couple of minutes of waiting, because the toy store embeds one
- * document per call and does not batch.
+ * document per call and does not batch. The store that replaces it does batch,
+ * through a `BatchingStrategy` its starter auto-configures, so the same build
+ * against pgvector is a handful of calls rather than a hundred. That is not a
+ * detail if your gateway is rate limited.
  */
 @SpringBootTest
 @EnabledIfEnvironmentVariable(
@@ -99,7 +102,10 @@ class ChunkingComparisonTest {
 
     private fun measure(strategy: ChunkingStrategy, questions: List<RetrievalSet.Question>): Row {
         val store = SimpleVectorStore.builder(embeddingModel).build()
-        val stats = index.build(strategy, store)
+        // Nothing to forget: this store was created a line ago. The build
+        // deletes what it is about to write by default, which is what a store
+        // that remembers across runs needs and what this one cannot have.
+        val stats = index.build(strategy, store, replaceExisting = false)
 
         var hitAt3 = 0
         var hitAt1 = 0

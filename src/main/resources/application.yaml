@@ -44,6 +44,58 @@ spring:
         # works, and nothing anywhere says you are using the wrong model.
         model: ${AI4DEV_EMBEDDING_MODEL:embed}
 
+    # ─── where the vectors live ───────────────────────────────────────────────
+    #
+    # The index moved out of the application's heap and into the database the
+    # product already runs. One of these properties is a product decision, one
+    # of them has no effect at all, and knowing which is which is the lab.
+    vectorstore:
+      pgvector:
+        # Liquibase owns DDL in this product, so the library creates nothing.
+        #
+        # `false` is ALSO the framework's default in 2.0 — the reference flags
+        # it as a breaking change from the versions where the table appeared on
+        # its own — and it is written out anyway, because a default that
+        # decides where your schema comes from is not a default to inherit
+        # silently.
+        #
+        # One consequence worth knowing before it bites: with this false and
+        # `schema-validation` false (also the default), NOTHING checks at
+        # startup that the table exists. A missing migration surfaces as a
+        # failed INSERT the first time something indexes, not as a context that
+        # refuses to refresh.
+        initialize-schema: false
+        # The framework's default here is HNSW: an approximate search from the
+        # first query, before anybody decided the product could afford to be
+        # approximate. In this product the index is changeset 007 instead, so
+        # that turning it on is a reviewable change with a measurement either
+        # side of it.
+        #
+        # AND THIS PROPERTY DOES NOTHING HERE. Read the store's source: the
+        # index type is used in exactly one place, inside the branch that runs
+        # only when `initialize-schema` is true. With Liquibase owning DDL the
+        # index exists because changeset 007 ran, and not because of this line.
+        # It stays because it documents the intent and would be the correct
+        # value if anyone ever flipped the property above — not because it has
+        # an effect. A property that looks like it controls your search's
+        # accuracy and silently does not is worth meeting once, deliberately,
+        # here, rather than for the first time in an incident.
+        index-type: NONE
+        # Must match the operator class in changeset 007: COSINE_DISTANCE is the
+        # `<=>` operator and `vector_cosine_ops`. Mismatch them and PostgreSQL
+        # never uses the index, the search is quietly back to a full scan, and
+        # nothing anywhere reports it.
+        distance-type: COSINE_DISTANCE
+        # The table a developer will go and look at. Both are the defaults,
+        # written down because `SELECT * FROM vector_store` is the first thing
+        # anybody debugging this will type.
+        schema-name: public
+        table-name: vector_store
+        # `dimensions` is deliberately NOT set. Unset, the store reads it from
+        # the EmbeddingModel; set, it would be a third place that has to agree
+        # with the `vector(1536)` column in changeset 006 and with the model in
+        # `spring.ai.openai.embedding.model` above. Two is already one too many.
+
   # Google sign-in is configured ENTIRELY from the environment. Nothing is
   # committed here, which is the rule this repository has followed since Module
   # 1, and with no variables set there is no client registration: the

@@ -6,6 +6,7 @@ import org.springframework.ai.vectorstore.SearchRequest
 import org.springframework.ai.vectorstore.VectorStore
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.jdbc.core.JdbcTemplate
 
 /**
  * Ask the index one question and look at what comes back.
@@ -55,13 +56,23 @@ class AskByHandTest {
     @Autowired
     private lateinit var vectorStore: VectorStore
 
+    @Autowired
+    private lateinit var jdbc: JdbcTemplate
+
     @Test
     fun `what comes back for the question you typed`() {
         val question = System.getProperty("q")
             ?: System.getenv("AI4DEV_Q")
             ?: DEFAULT_QUESTION
 
-        val stats = index.build()
+        // The index used to be rebuilt here on every run, because the store was
+        // a map in this process's heap and there was nothing else it could be.
+        // Since the index became a table it survives the JVM, so rebuilding it
+        // to ask one question would be paying to embed fourteen documents in
+        // order to embed one sentence. Ask the index that is there; build it
+        // only if there is none.
+        val probe = VectorStoreProbe(jdbc)
+        val built = if (probe.chunkCount() == 0) index.build() else null
 
         val hits = vectorStore.similaritySearch(
             SearchRequest.builder()
@@ -74,7 +85,12 @@ class AskByHandTest {
         println()
         println("── asked ─────────────────────────────────────────────────────")
         println("question : $question")
-        println("index    : ${stats.documents} documents, ${stats.chunks} chunks")
+        println(
+            "index    : " + (
+                built?.let { "${it.documents} documents, ${it.chunks} chunks, built just now" }
+                    ?: "${probe.documentCount()} documents, ${probe.chunkCount()} chunks, already in the database"
+                ),
+        )
         println()
         hits.forEachIndexed { position, hit ->
             val score = hit.score?.let { "%.4f".format(it) } ?: "n/a"
