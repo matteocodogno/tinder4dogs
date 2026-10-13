@@ -22,3 +22,9 @@ target/
 # committed. mise merges it automatically on top of .mise.toml.
 .mise.local.toml
 .mise.*.local.toml
+
+# jqwik writes this after every run of the property tests, and an untracked
+# file here is not cosmetic: `ai4dev module N start` refuses to move when
+# `git status --porcelain` is not empty, so one test run would block the next
+# module for everybody.
+.jqwik-database
