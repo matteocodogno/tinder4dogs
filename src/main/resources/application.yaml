@@ -120,6 +120,30 @@ app:
   spa:
     origin: ${SPA_ORIGIN:http://localhost:5173}
 
+  # ─── the support bot ──────────────────────────────────────────────────────
+  support:
+    # How many chunks go into the prompt, per question, for ever. The splitter
+    # decided how big each one is, so this number multiplies that decision by
+    # itself. Three is what the retrieval harness measures recall at, which is
+    # what keeps the number the product was built on and the number it runs on
+    # the same one.
+    top-k: ${AI4DEV_SUPPORT_TOP_K:3}
+    # The floor under the similarity score, below which a chunk is not context.
+    #
+    # ZERO IS THE FRAMEWORK'S DEFAULT AND IT IS NOT A RECOMMENDATION. At zero
+    # there is no floor: every question retrieves three chunks, the context is
+    # never empty, and the "I do not know" path the prompt politely describes
+    # cannot be reached. The service logs a warning at startup while this is
+    # zero, because a product that cannot refuse is the thing this module is
+    # about.
+    #
+    # The right value cannot be told to you. It depends on the embedding model,
+    # on the corpus, and on whether the index is exact or approximate. Measure
+    # it with ThresholdSweepTest, which prints the recall you lose at every
+    # floor and the two numbers that decide whether a floor exists at all, then
+    # put that number here with the date you measured it.
+    similarity-threshold: ${AI4DEV_SUPPORT_THRESHOLD:0.0}
+
   prompts:
     # Which deployed version to serve. In Langfuse a version is deployed by
     # moving this label onto it, and rolled back by moving it back.

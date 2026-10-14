@@ -28,3 +28,9 @@ target/
 # `git status --porcelain` is not empty, so one test run would block the next
 # module for everybody.
 .jqwik-database
+
+# The HTTPie session file docs/support-bot.md creates in the repository root.
+# Untracked files are not harmless here: `ai4dev module N start` refuses to
+# switch while the tree is dirty, so a leftover from a demo blocks the next
+# module for a reason that has nothing to do with the code.
+t4d.json
