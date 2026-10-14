@@ -1,0 +1,73 @@
+{
+  "about": [
+    "Le quattro domande del passo 3: il corpus le risponde davvero.",
+    "Questo file e' documentazione sotto forma di dati, e si legge a mano. Non",
+    "c'e' un test che confronta le stringhe di 'mustState' con la risposta del",
+    "modello, e non per pigrizia: un confronto di stringhe su testo generato",
+    "misura la formulazione e non la correttezza, e un giudice automatico e' un",
+    "secondo modello da valutare. Quattro domande lette da una persona sono una",
+    "misura piu' onesta di venti giudicate da una macchina non tarata.",
+    "'expectedSources' invece e' verificabile: le fonti sono un elenco di id, e",
+    "un id si confronta."
+  ],
+  "questions": [
+    {
+      "id": "a1",
+      "goldSetId": "q13",
+      "question": "Quanto costa l'abbonamento premium?",
+      "expectedSources": ["faq-abbonamento"],
+      "mustState": [
+        "4,90 euro al mese",
+        "oppure 49 euro all'anno",
+        "il prezzo e' per account e non per cane"
+      ],
+      "mustNotState": [
+        "uno sconto, una promozione o un prezzo diverso: nel corpus non ci sono"
+      ],
+      "why": "La domanda piu' facile della giornata, e serve come controllo: se questa non funziona il problema non e' il retrieval."
+    },
+    {
+      "id": "a2",
+      "goldSetId": "q15",
+      "question": "Come disdico il premium?",
+      "expectedSources": ["faq-abbonamento"],
+      "mustState": [
+        "Impostazioni, Premium, Interrompi il rinnovo",
+        "l'abbonamento resta attivo fino alla fine del periodo gia' pagato",
+        "non ci sono penali"
+      ],
+      "mustNotState": [
+        "che serve scrivere all'assistenza per disdire: la pagina dice il contrario"
+      ],
+      "why": "Procedurale. Una risposta giusta ma incompleta qui e' un ticket in piu', non un errore: vale la pena notare la differenza."
+    },
+    {
+      "id": "a3",
+      "goldSetId": "q10",
+      "question": "Con quali filtri posso cercare un cane?",
+      "expectedSources": ["guida-match-e-ricerca"],
+      "mustState": [
+        "due filtri e soltanto due: razza e sesso",
+        "non si filtra per taglia, ne' per eta', ne' per temperamento"
+      ],
+      "mustNotState": [
+        "che si puo' filtrare per taglia perche' la taglia e' un campo del profilo"
+      ],
+      "why": "La risposta corretta e' in parte una NEGAZIONE. Un modello che riassume il documento senza leggere la frase negativa risponde 'razza, sesso, taglia e eta'', perche' quei campi sono nominati nella stessa pagina."
+    },
+    {
+      "id": "a4",
+      "goldSetId": "q17",
+      "question": "Quando vengono inviate le notifiche di un nuovo match?",
+      "expectedSources": ["wiki-export-notifiche", "release-notes-2026-Q3"],
+      "mustState": [
+        "push e email",
+        "raggruppate, al massimo una ogni quindici minuti"
+      ],
+      "mustNotState": [
+        "una notifica per ogni match: era vero prima del rilascio del terzo trimestre"
+      ],
+      "why": "Due documenti indipendenti dicono la stessa cosa, uno come tabella esportata dal wiki e uno come nota di rilascio. Chiedetevi quale dei due cita il bot, e se citarne uno solo e' sufficiente."
+    }
+  ]
+}
