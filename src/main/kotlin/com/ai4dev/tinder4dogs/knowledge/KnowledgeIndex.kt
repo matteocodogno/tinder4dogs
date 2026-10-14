@@ -56,6 +56,14 @@ import org.springframework.stereotype.Component
  * what it was told, so comparing strategies in a single store would measure
  * all three at once and call it the third.
  *
+ * ## The gate runs first, and it can refuse
+ *
+ * [build] calls [CorpusGate] before it reads a single file. If the corpus has a
+ * document with no date, one older than the stated cutoff, a near-duplicate or
+ * an email address in it, nothing is embedded and nothing is written: the build
+ * fails naming the file and the rule. Twenty minutes for somebody, instead of a
+ * confident sourced wrong answer to a paying customer.
+ *
  * The index is not built at startup. An index build is an embedding call per
  * chunk, and a product that pays that bill every time somebody restarts it on
  * a laptop is a product nobody will run twice. It is built when something asks
@@ -66,6 +74,7 @@ import org.springframework.stereotype.Component
 @Component
 class KnowledgeIndex(
     private val vectorStore: VectorStore,
+    private val gate: CorpusGate,
 ) {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -85,6 +94,11 @@ class KnowledgeIndex(
         target: VectorStore = vectorStore,
         replaceExisting: Boolean = true,
     ): IndexStats {
+        // Before anything is read, embedded or written. A corpus that is not fit
+        // to answer from does not get indexed, and the build says which file and
+        // which rule rather than producing a fluent wrong answer in March.
+        gate.enforce()
+
         val documents = read()
         if (replaceExisting) forget(documents, target)
         val chunks = strategy.split(documents)

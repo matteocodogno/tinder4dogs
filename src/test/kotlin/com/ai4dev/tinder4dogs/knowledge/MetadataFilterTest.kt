@@ -40,12 +40,15 @@ import org.springframework.jdbc.core.JdbcTemplate
  *
  * ## The two surprises, and both are measured here
  *
- * **A document with no `updated` disappears.** `faq-foto-v3.md` has no `updated`
- * in its front matter, which was a mistake somebody made and nobody noticed.
- * Filtering on `updated` removes it, silently, because a JSONPath predicate over
- * a key that is not there is not true. A filter on metadata is therefore also a
- * filter on metadata QUALITY, and the test below pins that behaviour rather than
- * describing it.
+ * **A document with no `updated` disappears.** Filtering on `updated` removes it
+ * silently, because a JSONPath predicate over a key that is not there is not
+ * true. A filter on metadata is therefore also a filter on metadata QUALITY, and
+ * nothing anywhere reports which of the two excluded a document.
+ *
+ * The corpus used to contain exactly that case: `faq-foto-v3.md` with no date.
+ * The index-time gate now refuses to index an undated document at all, so the
+ * fix has moved upstream and this filter is what catches the next one before
+ * anybody runs the gate.
  *
  * **The filter is not SQL you wrote.** It is parsed from a portable expression
  * language and translated by the store into a PostgreSQL JSONPath predicate
@@ -91,26 +94,22 @@ class MetadataFilterTest {
             .describedAs("nothing retrieved may be older than %s", cutoff)
             .allMatch { hit -> hit.updated != null && hit.updated >= cutoff }
 
-        // The document whose front matter is missing `updated`. It is reachable
-        // without the filter and unreachable with it, at every cutoff, and
-        // nothing in between reports that a document was excluded for having bad
-        // metadata rather than for being old.
-        assertThat(filtered.values.flatten().map { it.docId })
-            .describedAs("a document with no `updated` cannot satisfy a filter on `updated`")
-            .doesNotContain(UNDATED_DOCUMENT)
-        assertThat(unfiltered.values.flatten().map { it.docId })
-            .describedAs("and it WAS reachable before the filter, which is what makes it a trap")
-            .contains(UNDATED_DOCUMENT)
-
-        // The page the release notes contradict, at the cutoff this corpus was
-        // written for. Only asserted at that cutoff: at an earlier one the page
-        // is legitimately inside the window and keeping the assertion would make
-        // the environment variable a way to break the build.
-        if (cutoff == DEFAULT_CUTOFF) {
-            assertThat(filtered.values.flatten().map { it.docId })
-                .describedAs("the stale badge guide is older than %s and must be gone", cutoff)
-                .doesNotContain(STALE_DOCUMENT)
-        }
+        // THE TWO NAMED CASES THIS TEST USED TO PIN ARE GONE, and that is the
+        // most interesting thing in this file now.
+        //
+        // It asserted that `faq-foto-v3` vanished under the filter because its
+        // front matter carried no `updated`, and that the stale badge guide
+        // vanished because it was older than the cutoff. Then the index-time
+        // gate arrived: the undated file was dated, and the guide was deleted
+        // because it documents a feature the release notes removed.
+        //
+        // So those two assertions have nothing left to catch. The filter still
+        // works and the invariant above still holds. What the day revealed is
+        // that this filter was COMPENSATING FOR A CORPUS NOBODY HAD GATED: fix
+        // the cause at index time and the runtime workaround goes quiet. It
+        // stays in the product anyway, because the next document somebody adds
+        // without a date will arrive before anyone runs the gate, and a filter
+        // that costs nothing is worth keeping for that day.
 
         // A filter must not empty the index. If it does, the cutoff is wrong and
         // the feature would answer "I do not know" to everything.
@@ -198,19 +197,5 @@ class MetadataFilterTest {
          */
         const val DEFAULT_CUTOFF = "2026-01-01"
 
-        /**
-         * No `updated` in its front matter, so any filter on `updated` removes
-         * it. The file is `faq-foto-v3.md`; this is its `docId`, which is the id
-         * written INSIDE the document and has no extension. The distinction is
-         * the one `FrontmatterTransformer` exists to keep, and writing the file
-         * name here instead made `doesNotContain` pass for the wrong reason:
-         * a collection never contains a string that is not in its vocabulary.
-         * The `contains` assertion below is what caught it, which is the whole
-         * argument for asserting the positive half of a disappearance.
-         */
-        const val UNDATED_DOCUMENT = "faq-foto-v3"
-
-        /** Describes a badge that the Q3 release notes removed. */
-        const val STALE_DOCUMENT = "guida-badge-cane-del-mese"
     }
 }

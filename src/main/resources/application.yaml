@@ -120,6 +120,36 @@ app:
   spa:
     origin: ${SPA_ORIGIN:http://localhost:5173}
 
+  # ─── the index-time gate ──────────────────────────────────────────────────
+  #
+  # It refuses to index. It does not clean, fix, or do its best. Every value
+  # here is a decision somebody made and can be argued with in a diff.
+  knowledge:
+    gate:
+      # Off only to demonstrate what the gate was preventing. The application
+      # logs a warning at every index build while it is false.
+      enabled: ${AI4DEV_GATE_ENABLED:true}
+      # A DATE, not "older than N months". A rolling window changes the gate's
+      # verdict on a morning when nobody changed anything, and that is how a
+      # team learns to ignore a build failure. Moving this date is a deliberate
+      # act, visible in a diff, with a name on it.
+      stale-before: ${AI4DEV_GATE_STALE_BEFORE:2026-01-01}
+      # Above this cosine similarity two documents are the same document. Do not
+      # inherit this number: CorpusGateTest prints every pair's similarity, so
+      # pick it from the distribution of YOUR corpus.
+      duplicate-similarity: ${AI4DEV_GATE_DUPLICATE_SIMILARITY:0.95}
+      # The near-duplicate rule costs one embedding call per document and puts a
+      # network dependency inside your gate. The other three rules are free and
+      # deterministic. This is the one to decide about before putting the gate
+      # in continuous integration.
+      check-near-duplicates: ${AI4DEV_GATE_NEAR_DUPLICATES:true}
+      # Exceptions, as `file:RULE:reason`, separated by semicolons. THE REASON IS
+      # MANDATORY and the gate refuses to start without it: an allow-list with
+      # no reasons becomes a list nobody dares to shorten, because nobody knows
+      # which entries were considered and which were somebody silencing a build.
+      allow: >-
+        faq-generale.md:PII:the published support address, not a person's
+
   # ─── the support bot ──────────────────────────────────────────────────────
   support:
     # How many chunks go into the prompt, per question, for ever. The splitter

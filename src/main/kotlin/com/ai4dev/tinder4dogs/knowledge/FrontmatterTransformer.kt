@@ -38,7 +38,9 @@ class FrontmatterTransformer : DocumentTransformer {
 
     private fun transformOne(document: Document): Document {
         val text = document.text ?: return document
-        val (frontmatter, body) = split(text)
+        val parsed = Frontmatter.parse(text)
+        val frontmatter = parsed.keys
+        val body = parsed.body
 
         // Start from what the reader already put there (source, charset) so
         // nothing is lost, then add ours on top.
@@ -52,37 +54,5 @@ class FrontmatterTransformer : DocumentTransformer {
         metadata.putIfAbsent("docId", metadata["source"] ?: "unknown")
 
         return Document(body, metadata)
-    }
-
-    /**
-     * Returns the front matter keys and the body without them. A file with no
-     * front matter is returned untouched, which is the right outcome for a page
-     * somebody pasted in without the header.
-     */
-    private fun split(text: String): Pair<Map<String, String>, String> {
-        val normalised = text.replace("\r\n", "\n")
-        if (!normalised.startsWith("---\n")) return emptyMap<String, String>() to text
-
-        val end = normalised.indexOf("\n---", startIndex = 3)
-        if (end < 0) return emptyMap<String, String>() to text
-
-        val block = normalised.substring(4, end)
-        val body = normalised.substring(end + 4).trimStart('\n')
-
-        // Deliberately not a YAML parser. The front matter in this corpus is
-        // flat `key: value` lines, and a dependency to read five of them would
-        // be a dependency to review, pin and upgrade for ever.
-        val keys = block.lineSequence()
-            .mapNotNull { line ->
-                val colon = line.indexOf(':')
-                if (colon <= 0) {
-                    null
-                } else {
-                    line.substring(0, colon).trim() to line.substring(colon + 1).trim()
-                }
-            }
-            .toMap()
-
-        return keys to body
     }
 }

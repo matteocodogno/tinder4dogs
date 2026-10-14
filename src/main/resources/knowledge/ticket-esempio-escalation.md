@@ -12,8 +12,8 @@ dal gestionale dei ticket.
 ```
 Ticket:    T4D-18422
 Stato:     chiuso
-Utente:    Giulia Ferraro <giulia.ferraro@example.com>
-Telefono:  +39 347 8821044
+Utente:    [nome omesso] <[email omessa]>
+Telefono:  [numero omesso]
 Cane:      Pepe (meticcio, maschio, taglia media)
 Aperto:    2026-05-14 09:12
 ```
@@ -22,7 +22,7 @@ Aperto:    2026-05-14 09:12
 
 > Buongiorno, da tre settimane il profilo di Pepe non compare a nessuno dei
 > miei amici, anche se io lo vedo normalmente. Ho rifatto le foto due volte.
-> Il mio numero e' 347 8821044 se e' piu' comodo sentirci.
+> Il mio numero e' [numero omesso] se e' piu' comodo sentirci.
 
 ## Diagnosi
 

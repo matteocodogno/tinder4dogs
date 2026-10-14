@@ -1,6 +1,7 @@
 ---
 source: faq-foto-v3
 title: Le foto del profilo
+updated: 2026-09-30
 ---
 
 # Le foto del profilo
