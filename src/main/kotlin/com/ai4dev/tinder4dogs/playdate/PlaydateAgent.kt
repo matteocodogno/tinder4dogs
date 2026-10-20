@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service
 class PlaydateAgent(
     private val chatClients: ObjectProvider<ChatClient.Builder>,
     private val conversations: PlaydateConversations,
+    private val tools: PlaydateTools,
     private val resources: ResourceLoader,
 ) {
 
@@ -35,7 +36,10 @@ class PlaydateAgent(
                 .prompt()
                 .system(systemPrompt())
                 .user(withHistory(conversations.history(ownerSubject), input))
-                // LAB 1: give the agent its tools here
+                // The tools, and who is acting. Spring AI runs the loop:
+                // model, tool, model, until the model answers.
+                .tools(tools)
+                .toolContext(mapOf(PlaydateTools.OWNER to ownerSubject))
                 .call()
                 .content()
                 ?.trim()
