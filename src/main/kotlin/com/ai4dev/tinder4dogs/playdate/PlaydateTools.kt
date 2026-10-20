@@ -2,12 +2,14 @@ package com.ai4dev.tinder4dogs.playdate
 
 import com.ai4dev.tinder4dogs.dog.DogRepository
 import com.ai4dev.tinder4dogs.match.MatchScoreService
+import java.time.Instant
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.model.ToolContext
 import org.springframework.ai.tool.annotation.Tool
 import org.springframework.ai.tool.annotation.ToolParam
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Component
 
 data class MatchCandidate(
@@ -16,6 +18,14 @@ data class MatchCandidate(
     val breed: String,
     val age: Int,
     val score: Double,
+)
+
+data class PlaydateSummary(
+    val playdateId: Long,
+    val withDog: String,
+    val date: LocalDate,
+    val park: Park,
+    val status: PlaydateStatus,
 )
 
 /**
@@ -98,18 +108,76 @@ class PlaydateTools(
         if (!dogs.existsById(withDogId)) return rejected("dog $withDogId does not exist")
         if (fromDogId == withDogId) return rejected("a dog cannot meet itself")
 
-        val saved = playdates.save(
-            Playdate(
-                fromDogId = fromDogId,
-                toDogId = withDogId,
-                scheduledOn = day,
-                park = park,
-                status = PlaydateStatus.DRAFT,
-                createdBy = owner,
-            ),
+        // Idempotent: the same request twice leaves the same state as once.
+        val existing = playdates.findFirstByFromDogIdAndToDogIdAndScheduledOnAndStatusNot(
+            fromDogId, withDogId, day, PlaydateStatus.CANCELLED,
         )
+        if (existing != null) {
+            log.info("tool=propose_playdate result=ALREADY_EXISTS id={}", existing.id)
+            return "ALREADY_EXISTS id=${existing.id}"
+        }
+
+        val saved = try {
+            playdates.save(
+                Playdate(
+                    fromDogId = fromDogId,
+                    toDogId = withDogId,
+                    scheduledOn = day,
+                    park = park,
+                    status = PlaydateStatus.DRAFT,
+                    createdBy = owner,
+                ),
+            )
+        } catch (race: DataIntegrityViolationException) {
+            // Two requests at the same instant: the unique index let one through.
+            return rejected("this playdate already exists")
+        }
         log.info("tool=propose_playdate result=CREATED id={}", saved.id)
         return "CREATED id=${saved.id}"
+    }
+
+    /**
+     * The playdates of the user's dog, so the agent can find an id to cancel.
+     * Needed because the conversation keeps only text, not earlier tool results.
+     */
+    @Tool(description = "Lists the playdates of the user's dog, newest first, with their ids.")
+    fun listPlaydates(toolContext: ToolContext): List<PlaydateSummary> {
+        val owner = ownerOf(toolContext)
+        log.info("tool=list_playdates owner={}", owner)
+        val dogId = dogs.findByOwnerSubject(owner)?.id ?: return emptyList()
+        val rows = playdates.findByFromDogIdOrToDogIdOrderByIdDesc(dogId, dogId)
+        val names = dogs.findAllById(rows.flatMap { listOf(it.fromDogId, it.toDogId) }.toSet())
+            .associate { it.id to it.name }
+        return rows.map {
+            val other = if (it.fromDogId == dogId) it.toDogId else it.fromDogId
+            PlaydateSummary(it.id!!, names[other] ?: "?", it.scheduledOn, it.park, it.status)
+        }
+    }
+
+    /**
+     * Cancels a playdate. Reversible by design: the row is kept, with its status
+     * and the moment it was cancelled.
+     */
+    @Tool(description = "Cancels a playdate. Returns CANCELLED id=<id>, or REJECTED: <reason>.")
+    fun cancelPlaydate(
+        @ToolParam(description = "Id of the playdate, from listPlaydates") playdateId: Long,
+        toolContext: ToolContext,
+    ): String {
+        val owner = ownerOf(toolContext)
+        log.info("tool=cancel_playdate owner={} playdateId={}", owner, playdateId)
+
+        val playdate = playdates.findById(playdateId).orElse(null)
+            ?: return rejected("playdate $playdateId does not exist")
+        if (playdate.status == PlaydateStatus.CANCELLED) {
+            log.info("tool=cancel_playdate result=ALREADY_CANCELLED id={}", playdateId)
+            return "ALREADY_CANCELLED id=$playdateId"
+        }
+
+        playdate.status = PlaydateStatus.CANCELLED
+        playdate.cancelledAt = Instant.now()
+        playdates.save(playdate)
+        log.info("tool=cancel_playdate result=CANCELLED id={}", playdateId)
+        return "CANCELLED id=$playdateId"
     }
 
     private fun rejected(reason: String): String {
