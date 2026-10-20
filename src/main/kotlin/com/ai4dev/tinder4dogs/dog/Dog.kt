@@ -85,4 +85,11 @@ class Dog(
     )
     @Column(name = "preference", nullable = false)
     var preferences: MutableSet<String> = mutableSetOf(),
+
+    /**
+     * Free text written by the owner. Module 14 hands it to the playdate agent,
+     * which makes it text written by one user and read by another user's agent.
+     */
+    @Column(name = "bio", columnDefinition = "text")
+    var bio: String? = null,
 )

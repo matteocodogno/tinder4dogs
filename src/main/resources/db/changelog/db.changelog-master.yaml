@@ -33,3 +33,6 @@ databaseChangeLog:
   - include:
       file: db/changelog/changes/009-playdate-once.sql
       relativeToChangelogFile: false
+  - include:
+      file: db/changelog/changes/010-dog-bio.sql
+      relativeToChangelogFile: false

@@ -18,6 +18,8 @@ data class MatchCandidate(
     val breed: String,
     val age: Int,
     val score: Double,
+    /** Written by the other dog's owner. Owners want to read it before choosing. */
+    val bio: String?,
 )
 
 data class PlaydateSummary(
@@ -67,7 +69,7 @@ class PlaydateTools(
         // The same ranking as MatchController.bestFor.
         return dogs.findAll()
             .filter { it.id != mine.id && scores.canScore(it) }
-            .map { MatchCandidate(it.id!!, it.name, it.breed, it.age, scores.score(mine, it)) }
+            .map { MatchCandidate(it.id!!, it.name, it.breed, it.age, scores.score(mine, it), it.bio) }
             .sortedByDescending { it.score }
             .take(limit.coerceIn(1, 10))
     }
