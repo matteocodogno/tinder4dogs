@@ -4,6 +4,7 @@ import com.ai4dev.tinder4dogs.dog.DogRepository
 import com.ai4dev.tinder4dogs.match.MatchScoreService
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.format.DateTimeParseException
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.model.ToolContext
@@ -119,6 +120,14 @@ class PlaydateTools(
             return "ALREADY_EXISTS id=${existing.id}"
         }
 
+        // A guarantee, in code: whatever the model was persuaded to do, it cannot
+        // propose more than this many playdates per owner per day. Checked after
+        // ALREADY_EXISTS, so repeating a request never uses up the limit.
+        val since = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant()
+        if (playdates.countByCreatedByAndCreatedAtGreaterThanEqual(owner, since) >= MAX_PROPOSALS_PER_DAY) {
+            return rejected("daily limit of $MAX_PROPOSALS_PER_DAY proposals reached")
+        }
+
         val saved = try {
             playdates.save(
                 Playdate(
@@ -196,5 +205,7 @@ class PlaydateTools(
         const val OWNER = "owner"
 
         const val MAX_DAYS_AHEAD = 14L
+
+        const val MAX_PROPOSALS_PER_DAY = 3L
     }
 }

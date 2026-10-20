@@ -1,5 +1,6 @@
 package com.ai4dev.tinder4dogs.playdate
 
+import java.time.Instant
 import java.time.LocalDate
 import org.springframework.data.jpa.repository.JpaRepository
 
@@ -15,4 +16,7 @@ interface PlaydateRepository : JpaRepository<Playdate, Long> {
         scheduledOn: LocalDate,
         status: PlaydateStatus,
     ): Playdate?
+
+    /** How many playdates this owner has asked for since the given instant. */
+    fun countByCreatedByAndCreatedAtGreaterThanEqual(createdBy: String, since: Instant): Long
 }
