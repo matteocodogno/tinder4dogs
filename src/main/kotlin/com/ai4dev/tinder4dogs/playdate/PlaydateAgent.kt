@@ -6,6 +6,7 @@ import java.util.Locale
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.client.ChatClient
 import org.springframework.beans.factory.ObjectProvider
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.core.io.ResourceLoader
 import org.springframework.stereotype.Service
 
@@ -22,6 +23,8 @@ class PlaydateAgent(
     private val conversations: PlaydateConversations,
     private val tools: PlaydateTools,
     private val resources: ResourceLoader,
+    private val manualLoop: PlaydateLoop,
+    @Value("\${app.playdate.loop:framework}") private val loop: String,
 ) {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -31,18 +34,26 @@ class PlaydateAgent(
         val input = sanitise(message).take(MAX_INPUT_CHARACTERS)
         if (input.isEmpty()) return EMPTY
 
+        val system = systemPrompt()
+        val user = withHistory(conversations.history(ownerSubject), input)
+
         val answer = try {
-            builder.build()
-                .prompt()
-                .system(systemPrompt())
-                .user(withHistory(conversations.history(ownerSubject), input))
-                // The tools, and who is acting. Spring AI runs the loop:
-                // model, tool, model, until the model answers.
-                .tools(tools)
-                .toolContext(mapOf(PlaydateTools.OWNER to ownerSubject))
-                .call()
-                .content()
-                ?.trim()
+            if (loop == "manual") {
+                // LAB 7: the same loop, written by hand, with our own step limit.
+                manualLoop.run(system, user, ownerSubject)?.trim()
+            } else {
+                builder.build()
+                    .prompt()
+                    .system(system)
+                    .user(user)
+                    // The tools, and who is acting. Spring AI runs the loop:
+                    // model, tool, model, until the model answers.
+                    .tools(tools)
+                    .toolContext(mapOf(PlaydateTools.OWNER to ownerSubject))
+                    .call()
+                    .content()
+                    ?.trim()
+            }
         } catch (failure: Exception) {
             log.warn("the playdate agent could not answer: {}", failure.message)
             null

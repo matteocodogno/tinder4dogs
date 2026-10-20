@@ -151,6 +151,14 @@ app:
         faq-generale.md:PII:the published support address, not a person's
 
   # ─── the support bot ──────────────────────────────────────────────────────
+  # ─── the playdate agent (Module 14) ──────────────────────────────────────
+  #
+  # loop: "framework" lets ChatClient run the tool loop; "manual" runs
+  # PlaydateLoop, the same loop written by hand, capped at max-steps.
+  playdate:
+    loop: ${AI4DEV_PLAYDATE_LOOP:framework}
+    max-steps: ${AI4DEV_PLAYDATE_MAX_STEPS:5}
+
   support:
     # How many chunks go into the prompt, per question, for ever. The splitter
     # decided how big each one is, so this number multiplies that decision by
