@@ -81,19 +81,20 @@ class PlaydateTools(
      * and ask the user again. The park needs no check: the enum in the schema
      * already limits what the model can send.
      */
-    @Tool(description = "Creates a playdate proposal (status DRAFT) between two dogs. Returns CREATED id=<id>, or REJECTED: <reason>.")
+    @Tool(description = "Creates a playdate proposal (status DRAFT) between the user's dog and another dog. Returns CREATED id=<id>, or REJECTED: <reason>.")
     fun proposePlaydate(
-        @ToolParam(description = "Id of the user's dog") fromDogId: Long,
         @ToolParam(description = "Id of the other dog, from findMatches") withDogId: Long,
         @ToolParam(description = "Day of the playdate, ISO format yyyy-MM-dd") date: String,
         @ToolParam(description = "Park where the dogs meet") park: Park,
         toolContext: ToolContext,
     ): String {
         val owner = ownerOf(toolContext)
-        log.info(
-            "tool=propose_playdate owner={} fromDogId={} withDogId={} date={} park={}",
-            owner, fromDogId, withDogId, date, park,
-        )
+        log.info("tool=propose_playdate owner={} withDogId={} date={} park={}", owner, withDogId, date, park)
+
+        // Whose dog is decided by the session, never by an argument. Before
+        // LAB 5 this was a parameter, fromDogId, and the user could choose it.
+        val fromDogId = dogs.findByOwnerSubject(owner)?.id
+            ?: return rejected("the user has no dog profile yet")
 
         val day = try {
             LocalDate.parse(date)
@@ -104,7 +105,6 @@ class PlaydateTools(
         if (day.isBefore(today.plusDays(1)) || day.isAfter(today.plusDays(MAX_DAYS_AHEAD))) {
             return rejected("date must be between tomorrow and $MAX_DAYS_AHEAD days from today")
         }
-        if (!dogs.existsById(fromDogId)) return rejected("dog $fromDogId does not exist")
         if (!dogs.existsById(withDogId)) return rejected("dog $withDogId does not exist")
         if (fromDogId == withDogId) return rejected("a dog cannot meet itself")
 
@@ -168,6 +168,8 @@ class PlaydateTools(
 
         val playdate = playdates.findById(playdateId).orElse(null)
             ?: return rejected("playdate $playdateId does not exist")
+        // Authority from the session: only the owner who created it can cancel it.
+        if (playdate.createdBy != owner) return rejected("not your playdate")
         if (playdate.status == PlaydateStatus.CANCELLED) {
             log.info("tool=cancel_playdate result=ALREADY_CANCELLED id={}", playdateId)
             return "ALREADY_CANCELLED id=$playdateId"
